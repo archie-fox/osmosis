@@ -226,7 +226,7 @@ function choiceRow<V extends string>(
 ) {
   return (
     <Box flexDirection="row">
-      <Box width={13} flexShrink={0}>
+      <Box width={14} flexShrink={0}>
         <Button key={`help-${name}`} plain dimColor={!isOpen} onPress={toggleHelp}>
           <Text dimColor>{isOpen ? '\u25be ' : '\u25b8 '}</Text>
           {title}
