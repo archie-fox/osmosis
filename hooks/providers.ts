@@ -109,12 +109,10 @@ const WORD_ITEM = {
     en: { type: 'string' },
     occurrence: { type: 'integer', minimum: 1 },
     target: { type: 'string' },
-    romanization: { type: 'string' },
     pos: { type: 'string' },
     gloss: { type: 'string' },
-    level: { type: ['integer', 'null'], minimum: 1, maximum: 6 },
   },
-  required: ['kind', 'en', 'occurrence', 'target', 'romanization', 'pos', 'gloss', 'level'],
+  required: ['kind', 'en', 'occurrence', 'target', 'pos', 'gloss'],
   additionalProperties: false,
 }
 

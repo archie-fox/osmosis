@@ -42,7 +42,7 @@ Requirements:
 
 A reply shows in English first. The Chinese words show a second or two later, when Claude has finished the reply and the translation is ready. Only the last text block of each reply is translated: short status lines between tool calls stay in English. Short replies, code, file paths, tables, and headings also stay in English.
 
-Each word is checked against the CC-CEDICT dictionary. The dictionary sets the pinyin, the HSK level, and the character-by-character breakdown. The card shows `✓ CC-CEDICT` for a checked word, or `unverified` when the dictionary does not have it.
+Each word is checked against the CC-CEDICT dictionary. The dictionary sets the pinyin, the HSK level, and the character-by-character breakdown. A word the dictionary does not have is not swapped. The card shows `✓ CC-CEDICT` for a checked word.
 
 ## Settings
 
@@ -97,7 +97,7 @@ The status line shows `🌱 中文 · <level>` while Osmosis is on, unless you t
 
 - Each finished reply costs one small Haiku call. Opening a word for its example costs one more small call, once per word. Osmosis remembers old translations and examples, so they show again at once.
 - If a translation fails, the reply shows in plain English.
-- On macOS and Linux, text you copy from a translated reply pastes as English. Osmosis watches the clipboard (with `pbpaste`, `wl-paste` or `xclip`) only to revert its own swaps; it changes nothing else and keeps no copy of what you copied. A copy that spans two replies stays as shown.
+- On macOS and Linux, text you copy from a translated reply pastes as English. Osmosis watches the clipboard (with `pbpaste`, `wl-paste` or `xclip`) only to revert its own swaps, and only while a translated reply is on screen; it changes nothing else and keeps no copy of what you copied. A copy that spans two replies stays as shown.
 - A typed command prints one short line, for example "Osmosis level: beginner." Claude sees that line, as it sees any command output. The pane buttons print nothing.
 
 ## Run it on a local model

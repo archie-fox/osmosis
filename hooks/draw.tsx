@@ -16,7 +16,7 @@ import type {
   OsmosisUsage,
   OsmosisWord,
 } from '../types'
-import { SETTING_ROWS, cardLines, cellWidth, langInfo, padCells, scopeFor, shownText } from './core'
+import { SETTING_ROWS, cardLines, cellWidth, fitCells, langInfo, padCells, scopeFor, shownText } from './core'
 import { usageLines } from './providers'
 import type { CardPlace, Part, Segment, Token } from './core'
 
@@ -153,15 +153,6 @@ export function drawMessage(
 
 // ---------- the band ----------
 
-function cut(s: string, cells: number): string {
-  if (cellWidth(s) <= cells) return s
-  let out = ''
-  for (const ch of s) {
-    if (cellWidth(out + ch) > cells - 1) break
-    out += ch
-  }
-  return out + '…'
-}
 
 export function cardLine(w: OsmosisWord): { head: string; rest: string } {
   const bits = [w.pos, w.gloss].filter(Boolean).join('  ')
@@ -193,7 +184,7 @@ export function drawBand(
             <Box display="none" hover={{ scope: scopeFor(r.key, r.index), display: 'flex' }} flexShrink={0}>
               <Text wrap="truncate-end">
                 <Text bold color={LEARN_COLOR}>{head}</Text>
-                <Text>{cut(rest, room)}</Text>
+                <Text>{fitCells(rest, room, 'cut')}</Text>
               </Text>
             </Box>
           )

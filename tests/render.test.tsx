@@ -5,23 +5,9 @@ import type { Engine } from 'claude-code/testing'
 import { DEFAULT_SETTINGS, keyFor } from '../hooks/core'
 
 const TEXT =
-  'I opened the computer and read the file. Then I wrote a short note for you.\n\n```ts\nconst computer = 1\n```'
+  'I opened the computer and read the file. Then I wrote a short note for you and pushed it.\n\n```ts\nconst computer = 1 // the computer value that the build step reads in this small test\nconst flag = "a short flag"\n```'
 
-const REPLY = JSON.stringify([
-  {
-    en: 'computer',
-    occurrence: 1,
-    target: '电脑',
-    romanization: 'diànnǎo',
-    pos: 'noun',
-    gloss: 'computer',
-    literal: '电 electric + 脑 brain',
-    example_target: '我的电脑很快。',
-    example_romanization: 'Wǒ de diànnǎo hěn kuài.',
-    example_en: 'My computer is fast.',
-    level: 1,
-  },
-])
+const REPLY = 'word|computer|1|电脑|noun|computer'
 
 const USAGE = { input_tokens: 1000, output_tokens: 500, cache_read_input_tokens: 200, cache_creation_input_tokens: 0 }
 const MESSAGE = { component: 'AssistantMessage', props: { text: TEXT, isFirstOfReply: true } } as const
@@ -51,6 +37,7 @@ const DICT: Record<string, string> = {
     '电\tdiàn\telectric',
     '脑\tnǎo\tbrain',
     '电脑\tdiànnǎo\tcomputer',
+    '笔记\tbǐjì\tnotes',
     '构\tgòu\tto construct',
     '建\tjiàn\tto establish',
     '构建\tgòujiàn\tto construct (sth abstract)',
@@ -72,7 +59,7 @@ function world(on: On, reply: string | null, store: Record<string, unknown> = {}
   mock.store(on, store)
   const calls = { model: 0, example: 0, opened: [] as string[], fetched: [] as { url: string; body: string }[], status: [] as (string | undefined)[] }
   const history = opts.history ?? [TEXT, LOW_TEXT]
-  const clip = { value: '', writes: [] as string[] }
+  const clip = { value: '', writes: [] as string[], reads: 0 }
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.messages', () => ({
     value: history.flatMap(text => [
@@ -83,7 +70,10 @@ function world(on: On, reply: string | null, store: Record<string, unknown> = {}
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('process.run', ($, e) => {
     const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
-    if (e.argv[0] === 'pbpaste') return out(clip.value)
+    if (e.argv[0] === 'pbpaste') {
+      clip.reads++
+      return out(clip.value)
+    }
     if (e.argv[0] === 'pbcopy') {
       clip.writes.push(String(e.init?.stdin ?? ''))
       clip.value = String(e.init?.stdin ?? '')
@@ -203,7 +193,8 @@ test('clicking a word opens the pane on that word', async ($, on) => {
     requestId: 'osmosis',
     props: { title: 'Osmosis 中文', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: SCROLL, view: {} },
   })
-  expect(await pane.find({ text: 'My computer is fast.' })).toBeDefined()
+  await settleAll(clock)
+  expect(await pane.find({ text: 'The computer broke.' })).toBeDefined()
   expect(await pane.find({ key: 'speak' })).toBeDefined()
   await pane.press({ key: 'save' })
   expect((await pane.find({ key: 'save' }))?.text).toContain('Unsave')
@@ -321,7 +312,7 @@ test('with the hover card in the bar, the word draws no floating card', async ($
   expect(walk(tree, n => n.props?.position === 'absolute')).toHaveLength(0)
 })
 
-const BUILD_TEXT = 'The build is green now. I fixed the failing check and pushed the change for you.'
+const BUILD_TEXT = 'The build is green now. I fixed the failing check and pushed the change for you.\n\nNothing else changed in this round, and the release can go out later today after one more look at the logs and the dashboard.'
 const PANE_PROPS = {
   plugin: 'osmosis',
   surface: 'terminal',
@@ -408,24 +399,16 @@ test('at the daily cap no new translation starts and the band says so', async ($
   expect(await band.find({ text: /daily cap reached/ })).toBeDefined()
 })
 
-test('CC-CEDICT fixes a wrong pinyin and HSK level; a word it lacks stays unverified', async ($, on) => {
-  const reply = JSON.stringify([item('computer', '电脑', 'diannao', 3), item('note', '笔记', 'bǐjì', 2)])
-  const { clock } = world(on, reply)
+test('CC-CEDICT sets pinyin and HSK; a word it lacks is dropped', async ($, on) => {
+  const { clock } = world(on, 'word|computer|1|电脑|noun|computer\nword|note|1|笔记|noun|note\nword|file|1|文件|noun|file')
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
   const msg = await $.ui.mount({ plugin: 'osmosis', surface: 'terminal', ...MESSAGE })
   await settleAll(clock)
   await msg.press({ key: 'w-0' })
   const pane = await $.ui.mount(PANE_PROPS)
-  const first = await paneText(pane)
-  expect(first).toContain('diànnǎo')
-  expect(first).toContain('HSK 1')
-  expect(first).toContain('✓ CC-CEDICT')
-  expect(first).toContain('电 electric + 脑 brain')
-  await msg.press({ key: 'w-1' })
-  const second = await paneText(pane)
-  expect(second).toContain('bǐjì')
-  expect(second).toContain('HSK 2')
-  expect(second).toContain('unverified')
+  const text = await paneText(pane)
+  for (const part of ['diànnǎo', 'HSK 1', '✓ CC-CEDICT', '电 electric + 脑 brain', '笔记 bǐjì']) expect(text).toContain(part)
+  expect(text).not.toContain('文件')
 })
 
 const localAnswer = (words: unknown[]) => ({
@@ -486,7 +469,7 @@ test('the status line row hides and shows the status entry', async ($, on) => {
 
 const FIRST_TEXT =
   '- I opened the computer and read the file.\n' + [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(n => `- Item number ${n} is a plain line.`).join('\n')
-const SHORT_TEXT = '- Item one is here and it is fine.\n- Item two is here as well.\n- I opened the computer and read the file.'
+const SHORT_TEXT = '- Item one is here and it is fine, with a little more text on this one line.\n- Item two is here as well, and it also has a little more text to read on screen.\n- I opened the computer and read the file.'
 
 const mountMsg = ($: Engine, text: string) =>
   $.ui.mount({ plugin: 'osmosis', surface: 'terminal', viewport: { columns: 100, rows: 40 }, component: 'AssistantMessage', props: { text, isFirstOfReply: true } })
@@ -592,7 +575,7 @@ test('the debug trace writes keys and counts to the plugin data folder, never re
   await settleAll(clock)
   const last = files.at(-1)
   expect(last?.path).toBe('/home/someone/.claude/plugins/data/osmosis/debug.log')
-  expect(last?.text).toMatch(/render key=[0-9a-f]{16} tx=ok hit=no final=yes queued=no swaps=1 cards=0 bar=1/)
+  expect(last?.text).toMatch(/render key=[0-9a-f]{16} tx=ok hit=no final=no queued=no swaps=1 cards=0 bar=1/)
   expect(last?.text).toMatch(/settle key=[0-9a-f]{16} words=1 fresh=true/)
   expect(last?.text).toMatch(/usage haiku in=1000 out=500/)
   expect(last?.text).not.toContain('opened')
@@ -613,7 +596,7 @@ test('/osmosis help lists every setting with its values and effect; the pane sho
   for (const help of ['Turn all translation on or off.', 'Which words swap: HSK 1-2, 3-4, or 5-6.', 'Haiku (default) or a local model on your machine.']) expect(text).toContain(help)
 })
 
-const PHRASE_TEXT = 'If it breaks, run the test again and check the logs for the error.'
+const PHRASE_TEXT = 'If it breaks, run the test again and check the logs for the error.\n\nThat is all for this change; the rest of the project stays the same until the next release goes out next week, as planned with the team.'
 
 test('a phrase at intermediate is kept and drawn as one swap; at beginner it is dropped', async ($, on) => {
   const reply = JSON.stringify([
@@ -631,4 +614,22 @@ test('a phrase at intermediate is kept and drawn as one swap; at beginner it is 
   await msg.press({ key: 'w-0' })
   const pane = await $.ui.mount(PANE_PROPS)
   expect(await paneText(pane)).toContain('zài yùnxíng cèshì')
+})
+
+test('the clipboard watcher runs while a translated message is on screen and stops when it scrolls off', async ($, on) => {
+  const { clock, clip } = world(on, REPLY)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  const props = { text: TEXT, isFirstOfReply: true, onScreen: { first: 0, last: 20, of: 6 } }
+  const msg = await $.ui.mount({ plugin: 'osmosis', surface: 'terminal', component: 'AssistantMessage', props })
+  await settleAll(clock)
+  expect(clip.reads).toBeGreaterThan(0)
+  await msg.redraw({ ...props, onScreen: null })
+  const before = clip.reads
+  clip.value = 'I opened the 电脑 and read the file.'
+  await settleAll(clock)
+  expect(clip.reads).toBe(before)
+  expect(clip.writes).toHaveLength(0)
+  await msg.redraw(props)
+  await settleAll(clock)
+  expect(clip.reads).toBeGreaterThan(before)
 })

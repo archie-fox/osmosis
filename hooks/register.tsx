@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, ModelUsage, Register } from 'claude-code'
+import type { EngineInterface, ModelUsage, Register, Timer } from 'claude-code'
 
 import type {
 
@@ -32,11 +32,13 @@ import {
   pickVoice,
   planCards,
   planMessage,
-  reviewLists,
+  reviewWords,
+  LOCAL_NOTE,
+  msToNextDay,
   scopeFor,
   swapCap,
 } from './core'
-import type { HistoryRow, OnScreenRows } from './core'
+import type { CardPlace, HistoryRow, OnScreenRows, Segment } from './core'
 import { revertCopy } from './copyback'
 import type { ShownBlock } from './copyback'
 import { EMPTY_DICT, parseCedict, parseHsk, verifyWord } from './dict'
@@ -59,7 +61,8 @@ import type { CallUsage, ExampleReply } from './providers'
 
 const PANE = 'osmosis'
 const SETTLE_MS = 1200
-const TICK_MS = 400
+const MIN_TRANSLATE = 200
+const FLUSH_MS = 3000
 const MAX_INFLIGHT = 2
 const MAX_JOBS = 40
 const CACHE_ITEMS = 500
@@ -97,13 +100,22 @@ const exJobs = new Map<string, ExJob>()
 const exInflight = new Set<string>()
 const exCache = new Map<string, ExampleReply>()
 let inflight = 0
-let ticks = 0
+let wakeTimer: Timer | null = null
+let wakeAt = Infinity
+let flushTimer: Timer | null = null
+let clipTimer: Timer | null = null
+const visible = new Set<string>()
+let isUnreported = false
+let cacheChars = 0
+const entryChars = new Map<string, number>()
+const planMemo = new Map<string, Plan>()
 let isCacheDirty = false
 let isProgressDirty = false
 let isUsageDirty = false
 let isExampleDirty = false
 let voice: string | undefined
 let isTicking = false
+type Plan = { segs: Segment[]; cards: Map<number, CardPlace> | null; swaps: number }
 let dict: Dict | null = null
 let dictLoading: Promise<Dict> | null = null
 const fallbackByMsg = new Map<string, string[]>()
@@ -136,7 +148,7 @@ async function loadAll($: $T) {
   const usage = (await $.store.get('usage')) as OsmosisUsage | undefined
   if (usage && typeof usage.days === 'object') await update($, usageAtom, () => usage)
   const pairs = (await $.store.get('cache')) as [string, OsmosisWord[]][] | undefined
-  if (Array.isArray(pairs)) for (const [k, words] of pairs) if (typeof k === 'string' && Array.isArray(words)) cache.set(k, words)
+  if (Array.isArray(pairs)) for (const [k, words] of pairs) if (typeof k === 'string' && Array.isArray(words)) remember(k, words)
   const examples = (await $.store.get('examples')) as [string, ExampleReply][] | undefined
   if (Array.isArray(examples)) for (const [k, ex] of examples) if (typeof k === 'string' && ex?.target) exCache.set(k, ex)
   const v = await $.store.get('voice')
@@ -184,9 +196,8 @@ async function watchClipboard($: $T) {
   isClipBusy = true
   try {
     const s = await read($, settingsAtom)
-    if (!s.isOn || s.copy !== 'english' || keyText.size === 0) return
     if (clipTool === undefined) clipTool = await findClipTool($)
-    if (!clipTool) return
+    if (!s.isOn || s.copy !== 'english' || !clipTool || (visible.size === 0 && !isUnreported)) return await syncClip($)
     const r = await $.process.run(clipTool.read, { timeoutMs: 3000 })
     if (r.exitCode !== 0 || r.isStdoutTruncated) return
     const hash = hashText(r.stdout)
@@ -236,11 +247,10 @@ async function readOffset($: $T) {
 }
 
 async function flush($: $T) {
+  flushTimer = null
   if (isCacheDirty) {
     isCacheDirty = false
-    let pairs = [...cache.entries()].slice(-CACHE_ITEMS)
-    while (pairs.length > 1 && JSON.stringify(pairs).length > CACHE_CHARS) pairs = pairs.slice(Math.ceil(pairs.length / 10))
-    await $.store.set('cache', pairs)
+    await $.store.set('cache', [...cache.entries()])
   }
   if (isProgressDirty) {
     isProgressDirty = false
@@ -252,7 +262,35 @@ async function flush($: $T) {
   }
   if (isExampleDirty) {
     isExampleDirty = false
-    await $.store.set('examples', [...exCache.entries()].slice(-EXAMPLE_ITEMS))
+    await $.store.set('examples', [...exCache.entries()])
+  }
+  await flushTrace($).catch(() => undefined)
+}
+
+function flushSoon($: $T) {
+  if (!flushTimer) flushTimer = $.clock.after(FLUSH_MS, () => void flush($).catch(() => undefined))
+}
+
+// One pending wake-up for the worker; nothing runs while idle.
+function wake($: $T, ms: number) {
+  const at = Date.now() + ms
+  if (wakeTimer && wakeAt <= at) return
+  wakeTimer?.cancel()
+  wakeAt = at
+  wakeTimer = $.clock.after(Math.max(0, ms), () => {
+    wakeTimer = null
+    wakeAt = Infinity
+    void tick($).catch(() => undefined)
+  })
+}
+
+async function syncClip($: $T) {
+  const s = await read($, settingsAtom)
+  const want = s.isOn && s.copy === 'english' && clipTool !== null && (visible.size > 0 || (isUnreported && keyText.size > 0))
+  if (want && !clipTimer) clipTimer = $.clock.every(CLIP_MS, () => void watchClipboard($))
+  if (!want && clipTimer) {
+    clipTimer.cancel()
+    clipTimer = null
   }
 }
 
@@ -282,12 +320,14 @@ async function changeSettings($: $T, patch: Partial<OsmosisSettings>): Promise<O
   const next = await update($, settingsAtom, s => ({ ...s, ...patch }))
   await $.store.set('settings', next)
   applyStatus($, next)
+  await syncClip($)
   return next
 }
 
 async function changeProgress($: $T, fn: (p: OsmosisProgress) => OsmosisProgress) {
   await update($, progressAtom, fn)
   isProgressDirty = true
+  flushSoon($)
 }
 
 // ---------- the dictionary ----------
@@ -301,16 +341,16 @@ async function loadDict($: $T): Promise<Dict> {
   const started = await $.clock.now()
   const root = `${$.plugin.root}/data`
   const sources = JSON.parse(await readText($, `${root}/sources.json`)) as { files: string[]; hsk: string }
-  const words = new Map()
-  for (const f of sources.files) parseCedict(await readText($, `${root}/${f}`), words)
+  const rows = new Map<string, string>()
+  for (const f of sources.files) parseCedict(await readText($, `${root}/${f}`), rows)
   const hsk = parseHsk(await readText($, `${root}/${sources.hsk}`))
   const ms = (await $.clock.now()) - started
   try {
-    $.ui.log(`osmosis: CC-CEDICT loaded in ${ms} ms (${words.size} words, ${hsk.size} HSK)`, { to: 'debug' })
+    $.ui.log(`osmosis: CC-CEDICT loaded in ${ms} ms (${rows.size} words, ${hsk.size} HSK)`, { to: 'debug' })
   } catch {
     // logging is optional
   }
-  return { words, hsk }
+  return { rows, hsk }
 }
 
 async function ensureDict($: $T): Promise<Dict> {
@@ -344,6 +384,7 @@ async function recordUsage($: $T, provider: OsmosisProvider, u: CallUsage) {
   await update($, usageAtom, usage => addUsage(usage, day, provider, u))
   note(`usage ${provider} in=${u.input} out=${u.output} cacheRead=${u.cacheRead} cacheWrite=${u.cacheWrite}`)
   isUsageDirty = true
+  flushSoon($)
 }
 
 async function setHealth($: $T, local: 'ok' | 'down') {
@@ -396,16 +437,30 @@ async function callHaiku($: $T, prompt: string, isWords: boolean, maxTokens: num
 // ---------- the translation worker ----------
 
 function remember(key: string, words: OsmosisWord[]) {
-  cache.delete(key)
+  forget(key)
+  const size = JSON.stringify(words).length + key.length + 8
   cache.set(key, words)
-  while (cache.size > CACHE_ITEMS) cache.delete(cache.keys().next().value as string)
+  entryChars.set(key, size)
+  cacheChars += size
+  while (cache.size > CACHE_ITEMS || cacheChars > CACHE_CHARS) forget(cache.keys().next().value as string)
+}
+
+function forget(key: string) {
+  cacheChars -= entryChars.get(key) ?? 0
+  entryChars.delete(key)
+  cache.delete(key)
 }
 
 async function settle($: $T, job: Job, words: OsmosisWord[], isFresh: boolean) {
   remember(job.key, words)
   rememberText(job.key, job.text)
-  if (isFresh) isCacheDirty = true
+  attempts.delete(job.key)
+  if (isFresh) {
+    isCacheDirty = true
+    flushSoon($)
+  }
   await $.state.set({ ...TX, id: job.key }, { status: 'ok', words })
+
   note(`settle key=${job.key} words=${words.length} fresh=${isFresh}`)
   try {
     await settleExtras($, job, words, isFresh)
@@ -449,9 +504,10 @@ async function settleExtras($: $T, job: Job, words: OsmosisWord[], isFresh: bool
 async function retryOrFail($: $T, job: Job, reason: string) {
   const n = (attempts.get(job.key) ?? 0) + 1
   attempts.set(job.key, n)
+  if (attempts.size > 200) attempts.delete(attempts.keys().next().value as string)
   if (n < 2 && !jobs.has(job.requestId)) {
     jobs.set(job.requestId, { ...job, updatedAt: 0 })
-    return
+    return wake($, 0)
   }
   note(`fail key=${job.key} reason=${reason} attempt=${n}`)
   await $.state.set({ ...TX, id: job.key }, { status: 'failed', reason })
@@ -464,11 +520,11 @@ async function translate($: $T, job: Job) {
     const cap = swapCap(job.text, job.settings.density)
     if (cap === 0) return await settle($, job, [], true)
     const progress = await read($, progressAtom)
-    const prompt = buildPrompt(job.text, job.settings, reviewLists(progress), cap)
+    const prompt = buildPrompt(job.text, job.settings, reviewWords(progress), cap)
     const r =
       job.settings.model === 'local'
-        ? await callLocal($, job.settings, RULES, prompt, wordsSchema(cap), Math.min(3000, 300 + cap * 120))
-        : await callHaiku($, prompt, true, Math.min(3000, 300 + cap * 120))
+        ? await callLocal($, job.settings, RULES + LOCAL_NOTE, prompt, wordsSchema(cap), 200 + cap * 80)
+        : await callHaiku($, prompt, true, 100 + cap * 40)
     if (!r.ok) return await retryOrFail($, job, r.reason)
     const isMandarin = langInfo(job.settings.lang).isMandarin
     const parsed = parseReply(r.text, job.text, {
@@ -481,12 +537,14 @@ async function translate($: $T, job: Job) {
     if (!parsed.ok) return await retryOrFail($, job, parsed.reason)
     note(`translate key=${job.key} cap=${cap} kept=${parsed.words.length} replyChars=${r.text.length}`)
     const d = isMandarin ? await ensureDict($) : EMPTY_DICT
-    await settle($, job, isMandarin ? parsed.words.map(w => verifyWord(w, d)) : parsed.words, true)
+    const checked = isMandarin ? parsed.words.map(w => verifyWord(w, d)) : parsed.words
+    await settle($, job, d.rows.size ? checked.filter(w => w.verified) : checked, true)
   } catch {
     await retryOrFail($, job, 'error').catch(() => undefined)
   } finally {
     inflight--
     inflightKeys.delete(job.key)
+    wake($, 0)
   }
 }
 
@@ -498,7 +556,9 @@ async function fetchExample($: $T, job: ExJob, s: OsmosisSettings) {
     const ex = r.ok ? parseExample(r.text) : null
     if (ex) {
       exCache.set(job.id, ex)
+      if (exCache.size > EXAMPLE_ITEMS) exCache.delete(exCache.keys().next().value as string)
       isExampleDirty = true
+      flushSoon($)
       await $.state.set({ ...EX, id: job.id }, { status: 'ok', target: ex.target, romanization: ex.romanization, en: ex.en })
     } else {
       await $.state.set({ ...EX, id: job.id }, { status: 'failed' })
@@ -507,21 +567,17 @@ async function fetchExample($: $T, job: ExJob, s: OsmosisSettings) {
     await $.state.set({ ...EX, id: job.id }, { status: 'failed' }).catch(() => undefined)
   } finally {
     exInflight.delete(job.id)
+    wake($, 0)
   }
 }
 
 async function tick($: $T) {
   if (isTicking) return
   isTicking = true
-  try {
-    await tickOnce($)
-  } finally {
-    isTicking = false
-  }
+  await tickOnce($).finally(() => (isTicking = false))
 }
 
 async function tickOnce($: $T) {
-  ticks++
   const now = await $.clock.now()
   const s = await read($, settingsAtom)
   const capped = isCapReached(await read($, usageAtom), dayOf(now), s)
@@ -556,17 +612,19 @@ async function tickOnce($: $T) {
     const all = [...new Set([...fallbackByMsg.values()].flat())].slice(-200)
     await update($, fallbacksAtom, () => all)
   }
-  if (ticks % 12 === 0) await flush($)
-  if (ticks % 5 === 0) await flushTrace($).catch(() => undefined)
+  const waiting = [...jobs.values()].filter(j => !inflightKeys.has(j.key))
+  if (waiting.length === 0) return
+  if (capped && waiting.every(j => j.settings.model === 'haiku')) return wake($, msToNextDay(now))
+  wake($, Math.max(50, Math.min(...waiting.map(j => j.updatedAt + SETTLE_MS - now))))
 }
 
-function noteFallbacks(msgKey: string, scopes: string[]) {
+function noteFallbacks(msgKey: string, scopes: string[]): boolean {
   const was = fallbackByMsg.get(msgKey) ?? []
-  if (was.length === scopes.length && was.every((x, i) => x === scopes[i])) return
+  if (was.length === scopes.length && was.every((x, i) => x === scopes[i])) return false
   fallbackByMsg.delete(msgKey)
   if (scopes.length) fallbackByMsg.set(msgKey, scopes)
   while (fallbackByMsg.size > 60) fallbackByMsg.delete(fallbackByMsg.keys().next().value as string)
-  isFallbackDirty = true
+  return (isFallbackDirty = true)
 }
 
 // ---------- pane actions ----------
@@ -594,7 +652,10 @@ async function exampleFor($: $T, w: OsmosisWord, capped: boolean): Promise<Examp
   const hit = exCache.get(id)
   if (hit) return { status: 'ok', ...hit }
   if (capped) return { status: 'cap' }
-  if (!exInflight.has(id) && !exJobs.has(id)) exJobs.set(id, { id, target: w.target, romanization: w.romanization, gloss: w.gloss })
+  if (!exInflight.has(id) && !exJobs.has(id)) {
+    exJobs.set(id, { id, target: w.target, romanization: w.romanization, gloss: w.gloss })
+    wake($, 0)
+  }
   return { status: 'loading' }
 }
 
@@ -648,23 +709,16 @@ async function startQuiz($: $T) {
   await update($, viewAtom, () => 'quiz' as const)
 }
 
+function flip<T>(m: Record<string, T>, k: string, v: T | undefined): Record<string, T> {
+  const { [k]: had, ...rest } = m
+  return had !== undefined || v === undefined ? rest : { ...m, [k]: v }
+}
+
 function actions($: $T, key: string | null, words: readonly OsmosisWord[], example: string): PaneActions {
   return {
     speak: w => void speak($, w, example),
-    toggleSave: w =>
-      void changeProgress($, p => {
-        const saved = { ...p.saved }
-        if (saved[w.target]) delete saved[w.target]
-        else saved[w.target] = w
-        return { ...p, saved }
-      }),
-    toggleKnown: w =>
-      void changeProgress($, p => {
-        const known = { ...p.known }
-        if (known[w.target]) delete known[w.target]
-        else known[w.target] = true
-        return { ...p, known }
-      }),
+    toggleSave: w => void changeProgress($, p => ({ ...p, saved: flip(p.saved, w.target, w) })),
+    toggleKnown: w => void changeProgress($, p => ({ ...p, known: flip(p.known, w.target, true as const) })),
     step: delta =>
       void update($, selectedAtom, sel => {
         if (!key || words.length === 0) return sel
@@ -674,12 +728,7 @@ function actions($: $T, key: string | null, words: readonly OsmosisWord[], examp
     pick: i => void (key ? update($, selectedAtom, () => ({ key, index: i })) : undefined),
     close: () => void $.ui.close({ id: PANE }),
     home: () => void update($, viewAtom, () => 'home' as const),
-    unsave: target =>
-      void changeProgress($, p => {
-        const saved = { ...p.saved }
-        delete saved[target]
-        return { ...p, saved }
-      }),
+    unsave: target => void changeProgress($, p => ({ ...p, saved: flip(p.saved, target, undefined) })),
     answer: choice =>
       void (async () => {
         const quiz = await read($, quizAtom)
@@ -718,20 +767,28 @@ function drawReply(
   s: OsmosisSettings,
   status: string,
 ) {
-  const segs = planMessage(text, words)
-  if (!segs.some(seg => seg.kind === 'prose')) {
+  const memo = `${key}|${words.length}|${view.columns}|${s.show}|${s.card}|${view.onScreen?.first}|${view.onScreen?.last}`
+  let plan = planMemo.get(memo)
+  if (!plan) {
+    const segs = planMessage(text, words)
+    const cards = s.card === 'bar' ? null : planCards(segs, words, s.show, view.columns, view.onScreen)
+    const swaps = segs.reduce((n, seg) => n + (seg.kind === 'prose' ? seg.lines.reduce((m, l) => m + l.tokens.filter(t => t.kind === 'swap').length, 0) : 0), 0)
+    plan = { segs, cards, swaps }
+    planMemo.set(memo, plan)
+    if (planMemo.size > 64) planMemo.delete(planMemo.keys().next().value as string)
+  }
+  const { segs, cards, swaps } = plan
+  if (swaps === 0) {
     note(`${status} swaps=0 (no prose block)`)
     return null
   }
+  if (cards && noteFallbacks(key, [...cards.entries()].filter(([, p]) => p.kind === 'bar').map(([i]) => scopeFor(key, i)))) wake($, 0)
   const pick = (index: number) =>
     void (async () => {
       await update($, selectedAtom, () => ({ key, index }))
       await update($, viewAtom, () => 'home' as const)
       await openPane($)
     })()
-  const cards = s.card === 'bar' ? null : planCards(segs, words, s.show, view.columns, view.onScreen)
-  if (cards) noteFallbacks(key, [...cards.entries()].filter(([, p]) => p.kind === 'bar').map(([i]) => scopeFor(key, i)))
-  const swaps = segs.reduce((n, seg) => n + (seg.kind === 'prose' ? seg.lines.reduce((m, l) => m + l.tokens.filter(t => t.kind === 'swap').length, 0) : 0), 0)
   const floating = cards ? [...cards.values()].filter(p => p.kind !== 'bar').length : 0
   note(`${status} swaps=${swaps} cards=${floating} bar=${cards ? cards.size - floating : 0}`)
   return drawMessage(els, segs, words, key, view.isFirst, s, pick, cards)
@@ -764,8 +821,6 @@ export const register: Register = on => {
     const started = await read($, settingsAtom)
     isTraceOn = started.debug
     applyStatus($, started)
-    $.clock.every(TICK_MS, () => void tick($).catch(() => undefined))
-    $.clock.every(CLIP_MS, () => void watchClipboard($))
     void detectVoice($)
     return next(e)
   })
@@ -812,18 +867,15 @@ export const register: Register = on => {
     const key = keyFor(text, s)
     const { value: tx } = await $.state.get({ ...TX, id: key })
     const hit = tx?.status === 'ok' ? undefined : cache.get(key)
-    const isFinal = isFinalBlock(text, await read($, finalsAtom))
+    const open = tx === undefined && !hit && text.length >= MIN_TRANSLATE
+    const isFinal = open && isFinalBlock(text, await read($, finalsAtom))
     let queued = false
-    if (
-      tx === undefined &&
-      (isFinal || hit !== undefined) &&
-      e.props.onScreen !== null &&
-      !inflightKeys.has(key) &&
-      jobs.get(e.requestId)?.key !== key
-    ) {
+    if ((isFinal || (hit && tx === undefined)) && e.props.onScreen !== null && !inflightKeys.has(key) && jobs.get(e.requestId)?.key !== key) {
       jobs.set(e.requestId, { requestId: e.requestId, key, text, settings: s, updatedAt: await $.clock.now() })
+      wake($, hit ? 0 : SETTLE_MS)
       queued = true
     }
+    if (isTraceDirty) flushSoon($)
     const words = tx?.status === 'ok' ? tx.words : hit
     const status = `render key=${key} tx=${tx?.status ?? 'none'} hit=${hit ? 'yes' : 'no'} final=${isFinal ? 'yes' : 'no'} queued=${queued ? 'yes' : 'no'}`
     if (!words || words.length === 0) {
@@ -831,6 +883,11 @@ export const register: Register = on => {
       return next(e)
     }
     rememberText(key, text)
+    const was = visible.size + Number(isUnreported)
+    if (e.props.onScreen === undefined) isUnreported = true
+    else if (e.props.onScreen === null) visible.delete(key)
+    else visible.add(key)
+    if (visible.size + Number(isUnreported) !== was) await syncClip($)
     try {
       const { Box, Text, Button, Markdown } = $.ui.resolve(e)
       const view = { columns: e.viewport?.columns ?? 100, onScreen: e.props.onScreen, isFirst: e.props.isFirstOfReply }

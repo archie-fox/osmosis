@@ -297,97 +297,77 @@ export type ParseOptions = {
 }
 
 export function phraseCap(level: OsmosisSettings['level'], coverage: OsmosisSettings['coverage']): number {
-  if (level === 'advanced') return 2
-  if (level === 'intermediate') return 1
-  return coverage === 'maximum' ? 1 : 0
+  return level === 'advanced' ? 2 : level === 'intermediate' || coverage === 'maximum' ? 1 : 0
 }
 
 export type ParseResult = { ok: true; words: OsmosisWord[] } | { ok: false; reason: string }
 
+// JSON (the local provider) or a reply cut off by the token cap: keep complete items.
 export function extractJson(reply: string): unknown {
-  const cleaned = reply.replace(/```(?:json)?/gi, '')
-  const a = cleaned.indexOf('[')
-  const b = cleaned.lastIndexOf(']')
-  if (a !== -1 && b <= a) return salvageArray(cleaned.slice(a))
+  const t = reply.replace(/```(?:json)?/gi, '')
+  const a = t.indexOf('[')
   if (a === -1) {
-    const o = cleaned.indexOf('{')
-    const p = cleaned.lastIndexOf('}')
-    if (o === -1 || p <= o) return undefined
     try {
-      const obj = JSON.parse(cleaned.slice(o, p + 1)) as { words?: unknown }
+      const obj = JSON.parse(t.slice(t.indexOf('{'), t.lastIndexOf('}') + 1)) as { words?: unknown }
       return Array.isArray(obj.words) ? obj.words : undefined
     } catch {
       return undefined
     }
   }
-  try {
-    return JSON.parse(cleaned.slice(a, b + 1))
-  } catch {
-    return salvageArray(cleaned.slice(a))
-  }
-}
-
-// A reply cut off by the token cap: keep the complete items before the cut.
-function salvageArray(text: string): unknown {
-  for (let end = text.lastIndexOf('}'); end > 0; end = text.lastIndexOf('}', end - 1)) {
+  const tries = [t.slice(a, t.lastIndexOf(']') + 1)]
+  for (let cut = t.lastIndexOf('}'); cut > a; cut = t.lastIndexOf('}', cut - 1)) tries.push(`${t.slice(a, cut + 1)}]`)
+  for (const attempt of tries) {
     try {
-      const v = JSON.parse(`${text.slice(0, end + 1)}]`)
-      if (Array.isArray(v)) return v
+      return JSON.parse(attempt)
     } catch {
-      // try an earlier item end
+      // a reply cut off mid-item: try the last complete item
     }
   }
   return undefined
 }
 
+// Haiku replies one item per line: kind|en|occurrence|target|pos|gloss.
+export function parseItems(reply: string): Record<string, unknown>[] | null {
+  const t = reply.trim()
+  const out: Record<string, unknown>[] = []
+  for (const line of t.split('\n')) {
+    const f = line.split('|').map(x => x.trim())
+    if (f.length === 6) out.push({ kind: f[0], en: f[1], occurrence: Number(f[2]), target: f[3], pos: f[4], gloss: f[5] })
+  }
+  if (out.length || /^(none|nothing)?\.?$/i.test(t)) return out
+  const data = /[[{]/.test(t) ? extractJson(t) : undefined
+  return Array.isArray(data) ? (data as Record<string, unknown>[]) : null
+}
+
 export function parseReply(reply: string, text: string, opts: ParseOptions): ParseResult {
-  const data = extractJson(reply)
-  if (!Array.isArray(data)) return { ok: false, reason: 'not-json' }
+  const data = parseItems(reply)
+  if (!data) return { ok: false, reason: 'unparsed' }
   const ranges = eligibleRanges(text)
   const words: OsmosisWord[] = []
-  const taken: Range[] = []
   const seenEn = new Set<string>()
   let knownUsed = 0
   let phrases = 0
-  for (const item of data) {
+  for (const o of data) {
     if (words.length >= Math.min(opts.cap, MAX_SWAPS)) break
-    if (typeof item !== 'object' || item === null) continue
-    const o = item as Record<string, unknown>
     const en = typeof o.en === 'string' ? o.en : ''
     const occurrence = Math.trunc(Number(o.occurrence ?? 1))
-    const target = str(o.target ?? o.zh, 24)
-    if (!en || !target || !Number.isFinite(occurrence) || occurrence < 1) continue
+    const target = str(o.target, 24)
+    if (!en || !target || !(occurrence >= 1)) continue
     if (opts.isMandarin ? !CJK.test(target) : target.toLowerCase() === en.toLowerCase()) continue
     if (seenEn.has(en.toLowerCase())) continue
     const isKnown = opts.known.has(target)
     if (isKnown && knownUsed >= 1) continue
     const enWords = en.split(' ').length
     const kind: 'word' | 'phrase' = o.kind === 'phrase' || enWords > 3 ? 'phrase' : 'word'
-    if (kind === 'phrase' && (enWords < 2 || enWords > 5 || phrases >= (opts.maxPhrases ?? 0))) continue
+    if (kind === 'phrase' && (enWords < 2 || phrases >= (opts.maxPhrases ?? 0))) continue
     const start = locate(text, en, occurrence, ranges)
     if (start === null) continue
     if (kind === 'word' && opts.coverage !== 'maximum' && isWeakSwap(en, str(o.pos, 30), isClauseStart(text, start))) continue
     const end = start + en.length
-    if (taken.some(r => start < r.end && r.start < end)) continue
-    const lvl = Number(o.level ?? o.hsk)
-    words.push({
-      en,
-      occurrence,
-      target,
-      romanization: str(o.romanization ?? o.pinyin, 60),
-      pos: str(o.pos, 30),
-      gloss: str(o.gloss, 120),
-      literal: str(o.literal, 160),
-      exampleTarget: str(o.example_target ?? o.example_zh, 160),
-      exampleRomanization: str(o.example_romanization ?? o.example_pinyin, 240),
-      exampleEn: str(o.example_en, 200),
-      level: Number.isInteger(lvl) && lvl >= 1 && lvl <= 6 ? lvl : null,
-      start,
-      end,
-      kind,
-    })
+    if (words.some(r => start < r.end && r.start < end)) continue
+    const gloss = str(o.gloss, 60).split(/\s+/).slice(0, 5).join(' ')
+    words.push({ en, occurrence, target, romanization: '', pos: str(o.pos, 30), gloss, literal: '', exampleTarget: '', exampleRomanization: '', exampleEn: '', level: null, start, end, kind })
     if (kind === 'phrase') phrases++
-    taken.push({ start, end })
     seenEn.add(en.toLowerCase())
     if (isKnown) knownUsed++
   }
@@ -397,112 +377,67 @@ export function parseReply(reply: string, text: string, opts: ParseOptions): Par
 
 // ---------- the prompt ----------
 
-export const RULES = `You pick words for Osmosis, a language-learning layer. You read one block of an AI assistant's reply (markdown) and choose English words or short phrases to show in a target language, so a learner picks up vocabulary while reading.
+export const RULES = `You pick English words in one block of an AI reply (markdown) to show in a target language, so a learner picks up vocabulary while reading.
+1. Pick only from plain prose. Skip text meant to be copied (drafts, messages, emails, commit or PR text), inline code, code fences, URLs, paths, identifiers, numbers, tables, headings, quotes, link text and bold text.
+2. "en" is an exact, case-matched substring: a whole word or phrase, no punctuation around it. "occurrence" is which appearance of that string, counting from 1.
+3. The learner reads the English sentence with your item in its place. Prefer nouns and noun phrases, then adjectives before a noun. Verbs only in base form (imperative, after "to" or a modal); never an inflected verb (expects, failed, running).
+4. Never pick adverbs of time, frequency or degree, conjunctions, prepositions, pronouns, articles, particles or question words, except one linking word that opens a sentence or clause where Chinese also puts it first (because 因为, but 但是, so 所以, however 不过, basically 基本上, first 首先, then 然后, finally 最后, now 现在, also 另外).
+5. The target has the same part of speech and sense as the English in this sentence.
+6. A phrase replaces 2-5 words inside one clause with one natural phrase in target-language word order that drops cleanly into the sentence. Stay within the phrase limit; a phrase counts toward the item limit.
+7. Fewer good items beat weak ones. Never exceed the item limit; follow the level and density. Prefer review words when they occur naturally.
+8. Coverage maximum lifts rules 3-5: any part of speech, and awkward English word order is acceptable.
+Output one item per line, fields separated by |, nothing else:
+kind|en|occurrence|target|pos|gloss
+kind is word or phrase; target in simplified hanzi for Mandarin; gloss is at most 4 English words. If nothing fits, output nothing.
+word|computer|1|电脑|noun|computer
+phrase|run the test again|1|再运行测试|phrase|run the test again`
 
-Rules:
-1. Pick ONLY from plain prose sentences. Never pick words from text meant to be copied: drafts, messages, emails, commit or PR text. Never pick text inside inline code (\`like this\`), code fences, URLs, file paths, command names, identifiers (camelCase, snake_case, names with dots, slashes or digits), numbers, version strings, table rows, headings, block quotes, link text, or bold text.
-2. "en" is copied exactly, character for character and with the same case, from the block. It is a whole word or a whole phrase, never part of a word, with no punctuation around it.
-3. "occurrence" says which appearance of that exact "en" string you mean, counting from 1 at the start of the block.
-4. The learner reads the English sentence with your item dropped in its place, so pick items that still read naturally there:
-   - Prefer nouns and noun phrases ("the test", "the function"), then adjectives directly before a noun ("an empty array").
-   - Pick a verb only where the English verb is in its base form: an imperative ("Run the test"), after "to", or after a modal such as can, should or will. Never replace an inflected verb ("expects", "failed", "running").
-   - Never pick adverbs of time, frequency or degree (now, again, already, very), conjunctions (because, but, and), prepositions, pronouns, articles, particles or question words.
-   - One exception: a single linking word that opens a sentence or clause, where Chinese puts it first too: because 因为, but 但是, so 所以, however 不过, basically 基本上, first 首先, then 然后, finally 最后, now 现在, also 另外. Example: "因为 the input is empty, the test fails". Inside a clause ("fails because the function", "run it again") these stay banned.
-5. The target item has the same part of speech and the same sense as the English word in this sentence: a noun for a noun, a verb for a verb (预期 is a noun or adjective, never the verb "expects").
-6. Fewer good items beat more weak ones. If fewer words qualify than the item limit, return fewer; never fill the limit with function words.
-7. Follow the level and the density given, and never go over the item limit.
-8. Avoid the learner's known words unless nothing else fits; use at most one known word.
-9. Gently prefer words from the "seen often, not saved" list when they occur naturally, so the learner reviews them.
-10. Reply with strict JSON only: one array, no prose, no code fence. If nothing fits, reply [].
+export const LOCAL_NOTE = '\nReply instead as a JSON array of objects with those six fields, matching the schema.'
 
-11. A "phrase" item replaces a contiguous English span of 2-5 words inside one clause ("run the test again") with one natural Chinese phrase in correct Chinese word order (再运行测试). The phrase must make sense on its own and drop cleanly into the English sentence where the span was. No punctuation inside the span except an apostrophe; never across inline code or links. Use phrases only up to the phrase limit given; a phrase counts toward the item limit.
-12. Coverage "natural" keeps rules 4-6. Coverage "maximum" lifts rules 4 and 5: any part of speech may swap (adverbs, conjunctions, inflected verbs, prepositions), and awkward English word order is acceptable.
-
-Each item has exactly these fields:
-{"kind": "word", "en": "computer", "occurrence": 1, "target": "电脑", "romanization": "diànnǎo", "pos": "noun", "gloss": "computer", "level": 1}
-{"kind": "phrase", "en": "run the test again", "occurrence": 1, "target": "再运行测试", "romanization": "zài yùnxíng cèshì", "pos": "phrase", "gloss": "run the test again", "level": 3}
-
-- target: the word in the target language (for Mandarin: simplified hanzi).
-- romanization: for Mandarin, pinyin with tone marks; for a language in Latin script, "".
-- kind: "word" or "phrase".
-- pos: noun, verb, adjective, adverb, phrase or idiom.
-- gloss: a short English meaning in this context.
-- level: HSK level 1-6 for Mandarin; for other languages the CEFR step as 1-6 (A1=1 ... C2=6); null if unsure.`
-
-const LEVEL_RULES: Record<OsmosisLevel, { zh: string; other: string }> = {
-  beginner: {
-    zh: 'beginner: HSK 1-2 nouns and base-form verbs, single words. When no HSK 1-2 word fits, a common, concrete HSK 3 noun is fine; otherwise take fewer items.',
-    other: 'beginner: A1-A2 nouns and base-form verbs, single words. When no A1-A2 word fits, a common, concrete B1 noun is fine; otherwise take fewer items.',
-  },
-  intermediate: {
-    zh: 'intermediate: HSK 3-4 words; nouns, noun phrases, adjectives before a noun, base-form verbs; two-word phrases are fine.',
-    other: 'intermediate: B1-B2 words; nouns, noun phrases, adjectives before a noun, base-form verbs; two-word phrases are fine.',
-  },
-  advanced: {
-    zh: 'advanced: HSK 5-6 words; idioms (成语) where they fit naturally; short phrases are fine.',
-    other: 'advanced: C1-C2 words; idioms where they fit naturally; short phrases are fine.',
-  },
+const LEVEL_RULES: Record<OsmosisLevel, string> = {
+  beginner: 'beginner: HSK 1-2 (CEFR A1-A2) nouns and base verbs, single words; a common concrete HSK 3 noun only if nothing else fits.',
+  intermediate: 'intermediate: HSK 3-4 (B1-B2) nouns, noun phrases, adjectives before a noun, base verbs.',
+  advanced: 'advanced: HSK 5-6 (C1-C2) words; idioms (成语) where natural.',
 }
 
-const DENSITY_RULES: Record<OsmosisDensity, { text: string; perSentence: number }> = {
-  low: { text: 'low: about 1 item per 3 sentences.', perSentence: 1 / 3 },
-  normal: { text: 'normal: about 1 item per sentence.', perSentence: 1 },
-  high: { text: 'high: about 2 items per sentence.', perSentence: 2 },
-}
+const PER_SENTENCE: Record<OsmosisDensity, number> = { low: 1 / 3, normal: 1, high: 2 }
 
 export function countSentences(text: string): number {
   let n = 0
   for (const block of splitBlocks(text)) {
     if (!block.isProse) continue
     const body = text.slice(block.start, block.end)
-    const ends = body.match(/[.!?](\s|$)/g)?.length ?? 0
-    const lines = body.split('\n').filter(l => l.trim() !== '').length
-    n += Math.max(ends, lines)
+    n += Math.max(body.match(/[.!?](\s|$)/g)?.length ?? 0, body.split('\n').filter(l => l.trim() !== '').length)
   }
   return n
 }
 
 export function swapCap(text: string, density: OsmosisDensity): number {
   const n = countSentences(text)
-  if (n === 0) return 0
-  return Math.max(1, Math.min(MAX_SWAPS, Math.ceil(n * DENSITY_RULES[density].perSentence)))
+  return n === 0 ? 0 : Math.max(1, Math.min(MAX_SWAPS, Math.ceil(n * PER_SENTENCE[density])))
 }
 
-export type PromptLists = { known: string[]; review: string[]; saved: string[] }
-
-export function reviewLists(progress: OsmosisProgress): PromptLists {
-  const known = Object.keys(progress.known).slice(-80)
-  const saved = Object.keys(progress.saved).slice(-60)
+export function reviewWords(progress: OsmosisProgress): string[] {
   const review = Object.entries(progress.seen)
     .filter(([t, s]) => s.n >= 3 && !progress.known[t] && !progress.saved[t])
     .sort((a, b) => b[1].n - a[1].n)
-    .slice(0, 40)
-    .map(([t, s]) => `${t} (${s.en})`)
-  return { known, review, saved }
+    .map(([t]) => t)
+  return [...Object.keys(progress.saved).slice(-8), ...review].slice(0, 15)
 }
 
-export function buildPrompt(text: string, s: OsmosisSettings, lists: PromptLists, cap: number): string {
+export function buildPrompt(text: string, s: OsmosisSettings, review: readonly string[], cap: number): string {
   const info = langInfo(s.lang)
-  const level = info.isMandarin ? LEVEL_RULES[s.level].zh : LEVEL_RULES[s.level].other
-  const target = info.isMandarin
-    ? 'Mandarin Chinese (simplified characters; pinyin with tone marks)'
-    : info.name
   return [
-    `Target language: ${target}`,
-    `Level: ${level}`,
-    `Density: ${DENSITY_RULES[s.density].text}`,
-    `Item limit for this block: ${cap}`,
-    `Phrase limit for this block: ${phraseCap(s.level, s.coverage)}`,
-    `Coverage: ${s.coverage === 'maximum' ? 'maximum (any part of speech; awkward English word order is acceptable)' : 'natural (keep English grammar intact)'}`,
-    `Known words (avoid): ${lists.known.join(', ') || 'none'}`,
-    `Seen often, not saved (review gently): ${lists.review.join(', ') || 'none'}`,
-    `Saved words (fine to reuse when natural): ${lists.saved.join(', ') || 'none'}`,
-    '',
-    'Block:',
+    `Target: ${info.isMandarin ? 'Mandarin Chinese (simplified)' : info.name}`,
+    `Level: ${LEVEL_RULES[s.level]}`,
+    `Item limit: ${cap}; phrase limit: ${phraseCap(s.level, s.coverage)}; coverage: ${s.coverage}`,
+    review.length ? `Review words: ${review.join(', ')}` : '',
     '<<<',
     text,
     '>>>',
-  ].join('\n')
+  ]
+    .filter(Boolean)
+    .join('\n')
 }
 
 // ---------- speech ----------
@@ -533,14 +468,34 @@ export function parseUtcOffset(s: string): number | null {
   return (m[1] === '-' ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3]))
 }
 
+export function msToNextDay(ms: number): number {
+  return 86_400_000 - ((ms + dayOffsetMin * 60_000) % 86_400_000) + 1000
+}
+
 export function dayOf(ms: number): string {
   return new Date(ms + dayOffsetMin * 60_000).toISOString().slice(0, 10)
 }
 
+const chWidth = (ch: string) => (/[ᄀ-ᅟ⺀-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦]/.test(ch) ? 2 : 1)
+
 export function cellWidth(s: string): number {
   let n = 0
-  for (const ch of s) n += /[ᄀ-ᅟ⺀-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦]/.test(ch) ? 2 : 1
+  for (const ch of s) n += chWidth(ch)
   return n
+}
+
+// One pass: cut to `cells` (with an ellipsis when cut) or pad with spaces to `cells`.
+export function fitCells(s: string, cells: number, mode: 'pad' | 'cut'): string {
+  const room = mode === 'cut' && cellWidth(s) > cells ? cells - 1 : cells
+  let out = ''
+  let w = 0
+  for (const ch of s) {
+    const cw = chWidth(ch)
+    if (w + cw > room) return mode === 'cut' ? `${out}\u2026` : out + ' '.repeat(cells - w)
+    out += ch
+    w += cw
+  }
+  return mode === 'cut' ? out : out + ' '.repeat(cells - w)
 }
 
 // ---------- planning a translated message ----------
@@ -718,14 +673,7 @@ export function planCards(
   return plans
 }
 
-export function padCells(s: string, cells: number): string {
-  let out = ''
-  for (const ch of s) {
-    if (cellWidth(out + ch) > cells) break
-    out += ch
-  }
-  return out + ' '.repeat(Math.max(0, cells - cellWidth(out)))
-}
+export const padCells = (s: string, cells: number) => fitCells(s, cells, 'pad')
 
 // ---------- which blocks to translate ----------
 

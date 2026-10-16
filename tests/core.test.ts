@@ -177,7 +177,7 @@ describe('voice pick', () => {
 })
 
 import { finalsFromHistory, isFinalBlock, RULES } from '../hooks/core'
-import { bestReading, literalFor, parseCedict, parseHsk, verifyWord } from '../hooks/dict'
+import { literalFor, parseCedict, parseHsk, verifyWord } from '../hooks/dict'
 import { addUsage, EMPTY_USAGE, isCapReached, localRequest, parseLocalReply, usageLines } from '../hooks/providers'
 
 describe('which block is translated', () => {
@@ -205,27 +205,26 @@ describe('which block is translated', () => {
 
 describe('CC-CEDICT check', () => {
   const dict = {
-    words: parseCedict('行\tháng\trow\txíng\tto walk\n电\tdiàn\telectric\n脑\tnǎo\tbrain\n电脑\tdiànnǎo\tcomputer'),
+    rows: parseCedict('行\tháng\trow\txíng\tto walk\n电\tdiàn\telectric\n脑\tnǎo\tbrain\n电脑\tdiànnǎo\tcomputer'),
     hsk: parseHsk('电脑\t1\n行\t4\n'),
   }
-  const word = (target: string, romanization: string, level: number | null) => ({
-    en: 'x', occurrence: 1, target, romanization, pos: 'noun', gloss: 'x', literal: 'junk',
-    exampleTarget: '', exampleRomanization: '', exampleEn: '', level, start: 0, end: 1,
+  const word = (target: string, gloss: string) => ({
+    en: 'x', occurrence: 1, target, romanization: '', pos: 'noun', gloss, literal: 'junk',
+    exampleTarget: '', exampleRomanization: '', exampleEn: '', level: null, start: 0, end: 1,
   })
 
-  test('a polyphone takes the reading closest to the model', () => {
-    expect(bestReading(dict.words.get('行')!, 'xing').reading).toBe('xíng')
-    expect(bestReading(dict.words.get('行')!, 'háng').reading).toBe('háng')
+  test('a polyphone takes the reading whose meaning matches the gloss', () => {
+    expect(verifyWord(word('行', 'walk'), dict).romanization).toBe('xíng')
+    expect(verifyWord(word('行', 'row'), dict).romanization).toBe('háng')
   })
 
-  test('a wrong pinyin and a wrong HSK level are corrected; literal comes from the dictionary', () => {
-    const w = verifyWord(word('电脑', 'diannao3', 4), dict)
+  test('pinyin, HSK and the breakdown come from the dictionary', () => {
+    const w = verifyWord(word('电脑', 'computer'), dict)
     expect([w.romanization, w.level, w.verified, w.literal]).toEqual(['diànnǎo', 1, true, '电 electric + 脑 brain'])
   })
 
-  test('a word the dictionary lacks stays unverified with the model values', () => {
-    const w = verifyWord(word('笔记', 'bǐjì', 2), dict)
-    expect([w.romanization, w.level, w.verified, w.literal]).toEqual(['bǐjì', 2, false, 'junk'])
+  test('a word the dictionary lacks is marked unverified', () => {
+    expect(verifyWord(word('笔记', 'note'), dict).verified).toBe(false)
     expect(literalFor('电子', dict, 'kept')).toBe('kept')
   })
 })
@@ -380,7 +379,7 @@ describe('robustness', () => {
 })
 
 import { phraseCap, keyFor as keyFor2 } from '../hooks/core'
-import { segment, verifyPhrase } from '../hooks/dict'
+import { segment } from '../hooks/dict'
 
 describe('phrases and coverage', () => {
   const text = 'If it breaks, run the test again and check the logs for the error.'
@@ -405,22 +404,33 @@ describe('phrases and coverage', () => {
 
   test('the dictionary segments a phrase and builds its pinyin, breakdown and level', () => {
     const d = {
-      words: parseCedict('再\tzài\tagain\n运行\tyùnxíng\tto run\n测试\tcèshì\tto test\n运\tyùn\tto move\n行\tháng\trow\txíng\tto walk'),
+      rows: parseCedict('再\tzài\tagain\n运行\tyùnxíng\tto run\n测试\tcèshì\tto test\n运\tyùn\tto move\n行\tháng\trow\txíng\tto walk'),
       hsk: parseHsk('再\t2\n运行\t5\n测试\t5\n'),
     }
     expect(segment('再运行测试', d)).toEqual(['再', '运行', '测试'])
-    const w = verifyPhrase({ ...phrase, kind: 'phrase', literal: '', exampleTarget: '', exampleRomanization: '', exampleEn: '', start: 0, end: 1 } as never, d)
+    const w = verifyWord({ ...phrase, kind: 'phrase', literal: '', exampleTarget: '', exampleRomanization: '', exampleEn: '', start: 0, end: 1 } as never, d)
     expect([w.romanization, w.literal, w.level, w.verified]).toEqual(['zài yùnxíng cèshì', '再 again + 运行 run + 测试 test', 5, true])
   })
 
   test('copy reverts a whole phrase to its English span', () => {
     const r = parseReply(JSON.stringify([phrase]), text, { ...OPTS, maxPhrases: 1 })
     if (!r.ok) throw new Error('parse')
-    expect(revertCopy('If it breaks, 再运行测试 and check', [{ text, words: r.words }], 'hanzi')).toBe('If it breaks, run the test again and check')
-    expect(revertCopy('breaks, 再运行测试 zai yunxing ceshi and', [{ text, words: r.words }], 'both')).toBe('breaks, run the test again and')
+    const words = r.words.map(w => ({ ...w, romanization: 'zài yùnxíng cèshì' }))
+    expect(revertCopy('If it breaks, 再运行测试 and check', [{ text, words }], 'hanzi')).toBe('If it breaks, run the test again and check')
+    expect(revertCopy('breaks, 再运行测试 zài yùnxíng cèshì and', [{ text, words }], 'both')).toBe('breaks, run the test again and')
   })
 
   test('the cache key differs by coverage', () => {
     expect(keyFor2(text, DEFAULT_SETTINGS)).not.toBe(keyFor2(text, { ...DEFAULT_SETTINGS, coverage: 'maximum' }))
+  })
+})
+
+describe('compact reply format', () => {
+  test('one item per line; malformed lines are dropped; empty means none', () => {
+    const text = 'I opened the computer and read the file. Then I wrote a short note for you.'
+    const r = parseReply('word|computer|1|电脑|noun|computer\nbad line\nword|note|1|笔记|noun|a short written note here too\n', text, OPTS)
+    expect(r.ok && r.words.map(w => [w.target, w.gloss])).toEqual([['电脑', 'computer'], ['笔记', 'a short written note here']])
+    expect(parseReply('', text, OPTS)).toEqual({ ok: true, words: [] })
+    expect(parseReply('I could not find any good words to pick in this block.', text, OPTS).ok).toBe(false)
   })
 })
