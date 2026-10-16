@@ -15,6 +15,7 @@ export const DEFAULT_SETTINGS: OsmosisSettings = {
   density: 'normal',
   show: 'hanzi',
   isBandOn: true,
+  card: 'word',
   lang: 'Mandarin',
 }
 
@@ -502,4 +503,85 @@ export function planMessage(text: string, words: readonly OsmosisWord[]): Segmen
   }
   flushMd()
   return segs
+}
+
+// ---------- floating card placement ----------
+
+export type SwapSpot = { row: number; x: number; avail: number }
+
+function tokenWidth(t: Token, words: readonly OsmosisWord[], show: OsmosisSettings['show']): number {
+  if (t.kind === 'parts') return cellWidth(t.parts.map(p => p.text).join(''))
+  const w = words[t.index]!
+  const extra = show === 'both' && w.romanization ? 1 + cellWidth(w.romanization) : 0
+  return cellWidth(shownText(w, show)) + extra + cellWidth(t.trailing)
+}
+
+export function placeSwaps(
+  segs: readonly Segment[],
+  words: readonly OsmosisWord[],
+  show: OsmosisSettings['show'],
+  columns: number,
+): Map<number, SwapSpot> {
+  const spots = new Map<number, SwapSpot>()
+  const body = Math.max(10, columns - 2)
+  let row = 0
+  segs.forEach((seg, si) => {
+    if (si > 0) row += 1
+    if (seg.kind === 'md') {
+      for (const line of seg.text.split('\n')) row += Math.max(1, Math.ceil(cellWidth(line) / body))
+      return
+    }
+    for (const line of seg.lines) {
+      const avail = Math.max(8, body - line.indent - (line.marker === null ? 0 : line.marker.length + 1))
+      let x = 0
+      for (const t of line.tokens) {
+        const w = tokenWidth(t, words, show)
+        if (x > 0 && x + w > avail) {
+          row++
+          x = 0
+        }
+        if (t.kind === 'swap') spots.set(t.index, { row, x, avail })
+        x += w
+      }
+      row++
+    }
+  })
+  return spots
+}
+
+export const CARD_MAX = 40
+
+export function cardLines(w: OsmosisWord): string[] {
+  return [
+    `${w.target}  ${w.romanization}`.trim(),
+    [w.pos, w.gloss].filter(Boolean).join(' \u00b7 '),
+    w.literal,
+    [w.level ? `HSK ${w.level}` : '', 'click for more'].filter(Boolean).join(' \u00b7 '),
+  ].filter(Boolean)
+}
+
+export type CardPlace = { top: number; side: 'left' | 'right'; inner: number; height: number }
+
+export type OnScreenRows = { first: number; last: number } | null | undefined
+
+export function placeCard(spot: SwapSpot, lines: readonly string[], onScreen: OnScreenRows): CardPlace {
+  const widest = Math.max(...lines.map(cellWidth))
+  const inner = Math.max(4, Math.min(widest, CARD_MAX - 4, spot.avail - 4))
+  const width = inner + 4
+  const height = lines.length + 2
+  const siteRow = spot.row + 1
+  const fitsInMessage = spot.row >= height
+  const fitsOnScreen = !onScreen || siteRow - height >= onScreen.first
+  const top = fitsInMessage && fitsOnScreen ? -height : 1
+  const side = spot.x + width > spot.avail && spot.x > 0 ? 'right' : 'left'
+  return { top, side, inner, height }
+}
+
+export function padCells(s: string, cells: number): string {
+  let out = ''
+  for (const ch of s) {
+    if (cellWidth(out + ch) > cells) break
+    out += ch
+  }
+  return out + ' '.repeat(Math.max(0, cells - cellWidth(out)))
 }

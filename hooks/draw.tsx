@@ -14,8 +14,8 @@ import type {
   OsmosisSettings,
   OsmosisWord,
 } from '../types'
-import { cellWidth, langInfo, scopeFor, shownText } from './core'
-import type { Part, Segment, Token } from './core'
+import { cardLines, cellWidth, langInfo, padCells, placeCard, placeSwaps, scopeFor, shownText } from './core'
+import type { OnScreenRows, Part, Segment, SwapSpot, Token } from './core'
 
 export type Els = {
   Box: ElementConstructor<BoxProps>
@@ -46,14 +46,58 @@ function drawWord(els: Els, w: OsmosisWord, scope: string, s: OsmosisSettings, k
   )
 }
 
-function drawToken(els: Els, t: Token, words: readonly OsmosisWord[], msgKey: string, s: OsmosisSettings, pick: (i: number) => void) {
+function drawCard({ Box, Text }: Els, w: OsmosisWord, spot: SwapSpot, onScreen: OnScreenRows) {
+  const lines = cardLines(w)
+  const p = placeCard(spot, lines, onScreen)
+  const head = cellWidth(w.target)
+  const box = (
+    <Box
+      position="absolute"
+      top={p.top}
+      {...(p.side === 'left' ? { left: 0 } : { right: 0 })}
+      display="none"
+      hover={{ display: 'flex' }}
+      borderStyle="round"
+      borderDimColor
+      flexDirection="column"
+      width={p.inner + 4}
+      flexShrink={0}
+    >
+      {lines.map((line, i) =>
+        i === 0 ? (
+          <Text>
+            {' '}
+            <Text bold color={LEARN_COLOR}>{w.target}</Text>
+            {`${padCells(line.slice(w.target.length), Math.max(0, p.inner - head))} `}
+          </Text>
+        ) : (
+          <Text dimColor={i === lines.length - 1}>{` ${padCells(line, p.inner)} `}</Text>
+        ),
+      )}
+    </Box>
+  )
+  return box
+}
+
+function drawToken(
+  els: Els,
+  t: Token,
+  words: readonly OsmosisWord[],
+  msgKey: string,
+  s: OsmosisSettings,
+  pick: (i: number) => void,
+  spots: Map<number, SwapSpot> | null,
+  onScreen: OnScreenRows,
+) {
   const { Box, Text } = els
   if (t.kind === 'swap') {
     const w = words[t.index]!
+    const spot = spots?.get(t.index)
     return (
-      <Box flexDirection="row" flexShrink={0}>
+      <Box key={`k-${t.index}`} flexDirection="row" flexShrink={0}>
         {drawWord(els, w, scopeFor(msgKey, t.index), s, `w-${t.index}`, () => pick(t.index))}
         {t.trailing ? <Text>{t.trailing}</Text> : null}
+        {spot ? drawCard(els, w, spot, onScreen) : null}
       </Box>
     )
   }
@@ -69,8 +113,11 @@ export function drawMessage(
   isFirst: boolean,
   s: OsmosisSettings,
   pick: (i: number) => void,
+  columns: number,
+  onScreen: OnScreenRows,
 ): RenderElement {
   const { Box, Text, Markdown } = els
+  const spots = s.card === 'bar' ? null : placeSwaps(segs, words, s.show, columns)
   return (
     <Box flexDirection="row" marginTop={1}>
       <Box minWidth={2} flexShrink={0}>
@@ -90,7 +137,7 @@ export function drawMessage(
                     </Box>
                   ) : null}
                   <Box flexDirection="row" flexWrap="wrap" flexGrow={1} flexShrink={1}>
-                    {line.tokens.map(t => drawToken(els, t, words, msgKey, s, pick))}
+                    {line.tokens.map(t => drawToken(els, t, words, msgKey, s, pick, spots, onScreen))}
                   </Box>
                 </Box>
               ))}
@@ -133,7 +180,7 @@ export function drawBand(
   return (
     <Box flexDirection="row">
       <Box flexDirection="row" flexShrink={0}>
-        {recent.map(r => {
+        {(s.card === 'word' ? [] : recent).map(r => {
           const { head, rest } = cardLine(r.word)
           const room = Math.max(10, columns - cellWidth(head) - 2)
           return (
@@ -198,6 +245,7 @@ const ON_OFF = [['on', 'On'], ['off', 'Off']] as const
 const LEVELS = [['beginner', 'Beginner'], ['intermediate', 'Intermediate'], ['advanced', 'Advanced']] as const
 const DENSITIES = [['low', 'Low'], ['normal', 'Normal'], ['high', 'High']] as const
 const SHOWS = [['hanzi', 'Hanzi'], ['pinyin', 'Pinyin'], ['both', 'Both']] as const
+const CARDS = [['word', 'At the word'], ['bar', 'In the bar'], ['both', 'Both']] as const
 
 export function drawSettings(els: Els, s: OsmosisSettings, act: PaneActions) {
   const { Box, Text, Button } = els
@@ -210,6 +258,7 @@ export function drawSettings(els: Els, s: OsmosisSettings, act: PaneActions) {
       {choiceRow(els, 'Level', 'level', LEVELS, s.level, v => act.setSettings({ level: v }))}
       {choiceRow(els, 'Density', 'density', DENSITIES, s.density, v => act.setSettings({ density: v }))}
       {choiceRow(els, 'Show', 'show', SHOWS, s.show, v => act.setSettings({ show: v }))}
+      {choiceRow(els, 'Hover card', 'card', CARDS, s.card, v => act.setSettings({ card: v }))}
       {choiceRow(els, 'Hover bar', 'bar', ON_OFF, bar, v => act.setSettings({ isBandOn: v === 'on' }), v => (v === bar ? undefined : 'v'))}
       <Box flexDirection="row" columnGap={1} marginTop={1}>
         <Button key="view-bank" label="Word bank" hotkey="w" onPress={() => act.openView('bank')} />

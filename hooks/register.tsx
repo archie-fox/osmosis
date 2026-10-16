@@ -363,7 +363,7 @@ export const register: Register = on => {
       await $.command.register({
         name: 'osmosis',
         description: 'Osmosis Chinese practice: open the word pane, or change settings',
-        argumentHint: '[on|off|level|density|show|band|bank|quiz|lang|help]',
+        argumentHint: '[on|off|level|density|show|card|band|bank|quiz|lang|help]',
         immediate: true,
       })
     } catch {
@@ -407,7 +407,7 @@ export const register: Register = on => {
         await update($, viewAtom, () => 'home' as const)
         await openPane($)
       })()
-    return drawMessage({ Box, Text, Button, Markdown }, segs, words, key, e.props.isFirstOfReply, s, pick)
+    return drawMessage({ Box, Text, Button, Markdown }, segs, words, key, e.props.isFirstOfReply, s, pick, e.viewport?.columns ?? 100, e.props.onScreen)
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -441,7 +441,7 @@ export const register: Register = on => {
     const arg = (rest[0] ?? '').toLowerCase()
     const v = verb.toLowerCase()
     const usage =
-      'Osmosis: /osmosis (open pane) · on|off · level beginner|intermediate|advanced · density low|normal|high · show hanzi|pinyin|both · band on|off · bank · quiz · lang <name>'
+      'Osmosis: /osmosis (open pane) · on|off · level beginner|intermediate|advanced · density low|normal|high · show hanzi|pinyin|both · card word|bar|both · band on|off · bank · quiz · lang <name>'
     try {
       if (v === '') {
         await update($, viewAtom, () => 'home' as const)
@@ -465,6 +465,10 @@ export const register: Register = on => {
       if (v === 'show' && (arg === 'hanzi' || arg === 'pinyin' || arg === 'both')) {
         await changeSettings($, { show: arg })
         return { text: `Osmosis shows ${arg === 'both' ? 'hanzi + pinyin' : arg}.` }
+      }
+      if (v === 'card' && (arg === 'word' || arg === 'bar' || arg === 'both')) {
+        await changeSettings($, { card: arg })
+        return { text: `Osmosis hover card: ${arg === 'word' ? 'at the word' : arg === 'bar' ? 'in the bar' : 'both'}.` }
       }
       if (v === 'band' && (arg === 'on' || arg === 'off')) {
         await changeSettings($, { isBandOn: arg === 'on' })

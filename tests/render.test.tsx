@@ -97,9 +97,28 @@ test('a translation in state draws a hover-scoped word button, on terminal and d
   expect(calls.model).toBe(1)
 })
 
+const BAND = {
+  plugin: 'osmosis',
+  surface: 'terminal',
+  component: 'AbovePrompt',
+  props: { hasSurvey: false, isWorking: false, maxRows: 6, bodyColumns: 100, scroll: SCROLL, view: {} },
+} as const
+
+test('with the hover card at the word, the band shows only its status line', async ($, on) => {
+  const { clock } = world(on, REPLY)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.ui.mount({ plugin: 'osmosis', surface: 'terminal', ...MESSAGE })
+  await clock.advance(2000)
+  await clock.settle()
+  const band = await $.ui.mount(BAND)
+  expect(walk(await band.drawn(), n => n.hover?.display === 'flex')).toHaveLength(0)
+  expect(await band.find({ text: /Osmosis 中文 · beginner/ })).toBeDefined()
+})
+
 test('the band holds a hidden card under the same hover scope', async ($, on) => {
   const { clock } = world(on, REPLY)
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'osmosis', args: 'card both', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } })
   const msg = await $.ui.mount({ plugin: 'osmosis', surface: 'terminal', ...MESSAGE })
   await clock.advance(2000)
   await clock.settle()
@@ -236,4 +255,61 @@ test('the on/off toggle in the pane turns the reply hook back to the engine', as
   await msg.redraw()
   expect(await msg.find({ text: 'ENGINE' })).toBeDefined()
   expect(await msg.find({ key: 'w-0' })).toBeUndefined()
+})
+
+const cardIn = (tree: unknown, index: number) => {
+  const holder = walk(tree, n => n.type === 'Box' && n.props?.key === `k-${index}`)[0]
+  const card = (holder?.children ?? []).find(c => (c as Node).type === 'Box' && (c as Node).props?.position === 'absolute') as Node | undefined
+  return { holder, card }
+}
+
+test('a swapped word is a keyed Box holding a hidden absolute card that hover reveals', async ($, on) => {
+  const { clock } = world(on, REPLY)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  const msg = await $.ui.mount({ plugin: 'osmosis', surface: 'terminal', viewport: { columns: 100, rows: 40 }, ...MESSAGE })
+  await clock.advance(2000)
+  await clock.settle()
+  const tree = await msg.drawn()
+  const { holder, card } = cardIn(tree, 0)
+  expect(walk(holder, n => n.type === 'Button' && n.props?.key === 'w-0')).toHaveLength(1)
+  expect(card?.props?.display).toBe('none')
+  expect(card?.hover?.display).toBe('flex')
+  expect(card?.props?.borderStyle).toBe('round')
+  expect(JSON.stringify(card)).toContain('click for more')
+  expect(hoverOf(tree, 'w-0')?.scope).toMatch(/^tw-/)
+})
+
+test('the card sits below a word on the first row and above a word lower down', async ($, on) => {
+  const { clock } = world(on, REPLY)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  const first = await $.ui.mount({ plugin: 'osmosis', surface: 'terminal', viewport: { columns: 100, rows: 40 }, ...MESSAGE })
+  const lowText = [1, 2, 3, 4, 5, 6, 7].map(n => `- Item number ${n} is a plain line.`).join('\n') + '\n- I opened the computer and read the file.'
+  const low = await $.ui.mount({
+    plugin: 'osmosis',
+    surface: 'terminal',
+    viewport: { columns: 100, rows: 40 },
+    component: 'AssistantMessage',
+    props: { text: lowText, isFirstOfReply: true },
+  })
+  await clock.advance(2000)
+  await clock.settle()
+  await clock.advance(2000)
+  await clock.settle()
+  expect(cardIn(await first.drawn(), 0).card?.props?.top).toBe(1)
+  const above = cardIn(await low.drawn(), 0).card
+  expect(above?.props?.top).toBe(-6)
+  expect(above?.props?.left).toBe(0)
+})
+
+test('with the hover card in the bar, the word draws no floating card', async ($, on) => {
+  const { clock } = world(on, REPLY)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  const r = await $.command.run({ command: 'osmosis', args: 'card bar', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } })
+  expect(r.text).toBe('Osmosis hover card: in the bar.')
+  const msg = await $.ui.mount({ plugin: 'osmosis', surface: 'terminal', ...MESSAGE })
+  await clock.advance(2000)
+  await clock.settle()
+  const tree = await msg.drawn()
+  expect(walk(tree, n => n.props?.key === 'w-0')).toHaveLength(1)
+  expect(walk(tree, n => n.props?.position === 'absolute')).toHaveLength(0)
 })

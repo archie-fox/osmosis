@@ -28,7 +28,7 @@ Requirements:
 ## How to use it
 
 - Read a reply as usual. A few words show in Chinese, underlined and in color.
-- Point at a Chinese word. A one-line card shows in the bar above the prompt: the characters, pinyin, word type, meaning, a character-by-character breakdown, and the HSK level.
+- Point at a Chinese word. A small card shows next to the word: the characters, pinyin, word type, meaning, a character-by-character breakdown, and the HSK level. The "Hover card" setting can move this card to the bar above the prompt.
 - Click a Chinese word. A side pane opens with the full card, an example sentence, and buttons.
 - In the pane, press these keys (click the pane first):
   - `s`: say the word and the example aloud in a Chinese voice.
@@ -48,7 +48,8 @@ Type `/osmosis` to open the pane. Its Settings section has a button for each cho
 - **Level**: Beginner (HSK 1-2), Intermediate (HSK 3-4), or Advanced (HSK 5-6, with idioms).
 - **Density**: Low (about 1 word in 3 sentences), Normal (about 1 per sentence), or High (about 2 per sentence).
 - **Show**: Hanzi (characters), Pinyin, or Both.
-- **Hover bar**: On or Off. Press `v` to switch. Off also turns off the hover card.
+- **Hover card**: At the word (the default: the card shows next to the word you point at), In the bar (a one-line card in the bar above the prompt), or Both.
+- **Hover bar**: On or Off. Press `v` to switch. Off hides the bar above the prompt, and its card too.
 - **Word bank** (`w`) and **Quiz** (`q`) open those views.
 
 Settings, saved words, and progress stay between sessions.
@@ -64,6 +65,7 @@ The same settings also work as typed commands:
 | `/osmosis level beginner` | Sets the level: `beginner`, `intermediate`, or `advanced`. |
 | `/osmosis density normal` | Sets the density: `low`, `normal`, or `high`. |
 | `/osmosis show hanzi` | Sets how a word shows: `hanzi`, `pinyin`, or `both`. |
+| `/osmosis card word` | Sets where the hover card shows: `word` (next to the word), `bar` (in the bar above the prompt), or `both`. |
 | `/osmosis band on` / `/osmosis band off` | Shows or hides the hover bar above the prompt. |
 | `/osmosis bank` | Opens your word bank. Each word has "say" and "unsave" buttons. |
 | `/osmosis quiz` | Starts a 5-question quiz from your saved and recent words. Press `1`-`4` to answer. A word you get right 3 times becomes "known". |

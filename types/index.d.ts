@@ -1,6 +1,7 @@
 export type OsmosisLevel = 'beginner' | 'intermediate' | 'advanced'
 export type OsmosisDensity = 'low' | 'normal' | 'high'
 export type OsmosisShow = 'hanzi' | 'both' | 'pinyin'
+export type OsmosisCard = 'word' | 'bar' | 'both'
 
 export type OsmosisSettings = {
   isOn: boolean
@@ -8,6 +9,7 @@ export type OsmosisSettings = {
   density: OsmosisDensity
   show: OsmosisShow
   isBandOn: boolean
+  card: OsmosisCard
   lang: string
 }
 
