@@ -142,6 +142,8 @@ let isTraceDirty = false
 let isTraceOn = false
 let tracePath: string | null = null
 const TRACE_LINES = 400
+// Each session tags its lines; sessions share one debug.log.
+const TRACE_TAG = Math.random().toString(36).slice(2, 6)
 const CLIP_MS = 400
 const CLIP_BLOCKS = 30
 let isFallbackDirty = false
@@ -226,7 +228,7 @@ async function watchClipboard($: $T) {
 
 function note(line: string) {
   if (!isTraceOn) return
-  trace.push(`${new Date().toISOString()} ${line}`)
+  trace.push(`${new Date().toISOString()} ${TRACE_TAG} ${line}`)
   if (trace.length > TRACE_LINES) trace.splice(0, trace.length - TRACE_LINES)
   isTraceDirty = true
 }
@@ -241,7 +243,10 @@ async function traceFile($: $T): Promise<string> {
 async function flushTrace($: $T) {
   if (!isTraceDirty) return
   isTraceDirty = false
-  await $.fs.write(await traceFile($), `${trace.join('\n')}\n`)
+  const path = await traceFile($)
+  const others = (await readText($, path).catch(() => '')).split('\n').filter(l => l && l.split(' ')[1] !== TRACE_TAG)
+  const lines = [...others, ...trace].sort().slice(-TRACE_LINES * 4)
+  await $.fs.write(path, `${lines.join('\n')}\n`)
 }
 
 async function readOffset($: $T) {
@@ -658,7 +663,7 @@ function noteFallbacks(msgKey: string, scopes: string[]): boolean {
 
 async function openPane($: $T) {
   const s = await read($, settingsAtom)
-  await $.ui.open({ id: PANE, title: `Osmosis ${langInfo(s.lang).label}` })
+  await $.ui.open({ id: PANE, title: `Osmosis ${langInfo(s.lang).label}`, closeOnEscape: true })
 }
 
 async function wordsOf($: $T, key: string | null): Promise<OsmosisWord[]> {
@@ -813,6 +818,8 @@ function drawReply(
   if (cards && noteFallbacks(key, [...cards.entries()].filter(([, p]) => p.kind === 'bar').map(([i]) => scopeFor(key, i)))) wake($, 0)
   const pick = (index: number) =>
     void (async () => {
+      note(`click key=${key} index=${index}`)
+      flushSoon($)
       await update($, selectedAtom, () => ({ key, index }))
       await update($, viewAtom, () => 'home' as const)
       await openPane($)
@@ -906,7 +913,7 @@ export const register: Register = on => {
     }
     if (isTraceDirty) flushSoon($)
     const words = tx?.status === 'ok' ? tx.words : hit
-    const status = `render key=${key} tx=${tx?.status ?? 'none'} hit=${hit ? 'yes' : 'no'} final=${isFinal ? 'yes' : 'no'} queued=${queued ? 'yes' : 'no'}`
+    const status = `render surface=${e.surface} key=${key} tx=${tx?.status ?? 'none'} hit=${hit ? 'yes' : 'no'} final=${isFinal ? 'yes' : 'no'} queued=${queued ? 'yes' : 'no'}`
     if (!words || words.length === 0) {
       note(status)
       return next(e)
@@ -949,6 +956,7 @@ export const register: Register = on => {
     const els = (({ Box, Text, Button, Markdown }) => ({ Box, Text, Button, Markdown }))($.ui.resolve(e))
     const s = await read($, settingsAtom)
     const view = await read($, viewAtom)
+    note(`pane surface=${e.surface} placement=${e.props.placement} focused=${e.props.isFocused}`)
     const progress = await read($, progressAtom)
     if (view === 'bank') return drawBank(els, progress, actions($, null, [], ''))
     if (view === 'quiz') return drawQuiz(els, await read($, quizAtom), actions($, null, [], ''))
@@ -979,6 +987,10 @@ export const register: Register = on => {
         return { text: `Osmosis pane opened (${s.isOn ? 'on' : 'off'}, ${s.level}, ${s.density} density).` }
       }
       if (v === 'help') return { text: settingsHelp() }
+      if (v === 'close') {
+        await $.ui.close({ id: PANE })
+        return { text: 'Osmosis pane closed.' }
+      }
       const isToggle = v === 'on' || v === 'off'
       const row = SETTING_ROWS.find(r => (isToggle ? r.command === 'on|off' : r.command === v))
       const choice = row?.values.find(x => x[0] === (isToggle ? v : arg))

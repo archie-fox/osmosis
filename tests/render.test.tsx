@@ -584,7 +584,7 @@ test('the debug trace writes keys and counts to the plugin data folder, never re
   await settleAll(clock)
   const last = files.at(-1)
   expect(last?.path).toBe('/home/someone/.claude/plugins/data/osmosis/debug.log')
-  expect(last?.text).toMatch(/render key=[0-9a-f]{16} tx=ok hit=no final=no queued=no swaps=1 cards=0 bar=1/)
+  expect(last?.text).toMatch(/render surface=terminal key=[0-9a-f]{16} tx=ok hit=no final=no queued=no swaps=1 cards=0 bar=1/)
   expect(last?.text).toMatch(/settle key=[0-9a-f]{16} words=1 fresh=true/)
   expect(last?.text).toMatch(/usage haiku in=1000 out=500/)
   expect(last?.text).not.toContain('opened')

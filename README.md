@@ -24,6 +24,7 @@ Requirements:
 
 - Claude Code 2.1.275 or later.
 - The fullscreen layout, for hover and click. Add `"tui": "fullscreen"` to your Claude Code settings.
+  If hover and click stop working, or the pane shows above the prompt instead of at the side, Claude Code may have turned fullscreen off by itself. Type `/tui fullscreen` to turn it back on.
 - Osmosis calls Claude Haiku to pick and translate words. The calls run on your own Claude login. You can use a local model instead (see below).
 - macOS for the Speak button, which uses the built-in `say` command. On other systems, Speak shows a message.
 
@@ -38,6 +39,7 @@ Requirements:
   - `k`: mark the word as known. Osmosis then shows it less often.
   - `n` / `p`: go to the next or the previous word of the same reply.
   - `x`: close the pane.
+- To close the pane without clicking it first, press Esc at an empty prompt, click the `×` on its frame, or type `/osmosis close`.
 - The pane also lists all the Chinese words of the reply. Click one to open it.
 
 A reply shows in English first. The Chinese words show a second or two later, when Claude has finished the reply and the translation is ready. Only the last text block of each reply is translated: short status lines between tool calls stay in English. Short replies, code, file paths, tables, and headings also stay in English.
@@ -73,6 +75,7 @@ The same settings also work as typed commands:
 |---|---|
 | `/osmosis` | Opens the pane with the words of the latest reply and the settings. |
 | `/osmosis help` | Lists every setting with its values and what it does. |
+| `/osmosis close` | Closes the pane. Esc at an empty prompt does the same. |
 | `/osmosis on` / `/osmosis off` | Turns Osmosis on or off. Off shows all replies in plain English. |
 | `/osmosis level beginner` | Sets the level: `beginner`, `intermediate`, or `advanced`. |
 | `/osmosis density normal` | Sets the density: `low`, `normal`, or `high`. |

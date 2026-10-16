@@ -641,6 +641,24 @@ function tokenWidth(t: Token, words: readonly OsmosisWord[], show: OsmosisSettin
   return cellWidth(shownText(w, show)) + extra + cellWidth(t.trailing)
 }
 
+// Markdown draws no code fences or emphasis marks; a table row gets a rule under it.
+export function mdRows(text: string, body: number): number {
+  let rows = 0
+  let inTable = false
+  for (const line of text.split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) continue
+    const isTable = /^\s*\|/.test(line)
+    if (isTable && !inTable) rows += 1
+    inTable = isTable
+    if (isTable) {
+      if (!/^\s*\|?[\s:|-]+\|?\s*$/.test(line)) rows += 2
+      continue
+    }
+    rows += Math.max(1, Math.ceil(cellWidth(line.replace(/\*\*|__|`/g, '').replace(/^#{1,6} /, '')) / body))
+  }
+  return rows
+}
+
 export function placeSwaps(
   segs: readonly Segment[],
   words: readonly OsmosisWord[],
@@ -653,7 +671,7 @@ export function placeSwaps(
   segs.forEach((seg, si) => {
     if (si > 0) row += 1
     if (seg.kind === 'md') {
-      for (const line of seg.text.split('\n')) row += Math.max(1, Math.ceil(cellWidth(line) / body))
+      row += mdRows(seg.text, body)
       return
     }
     for (const line of seg.lines) {
@@ -800,6 +818,6 @@ export function settingsHelp(): string {
   lines.push('- local-model <name>: Model name sent to the local server (Ollama, LM Studio).')
   lines.push('- lang <name>: Target language; Mandarin is the default and tested one.')
   lines.push('- debug on|off: Write a trace of keys and counts (no reply text) to a log file.')
-  lines.push('Other: /osmosis (open the pane), /osmosis bank, /osmosis quiz.')
+  lines.push('Other: /osmosis (open the pane), /osmosis close, /osmosis bank, /osmosis quiz.')
   return lines.join('\n')
 }

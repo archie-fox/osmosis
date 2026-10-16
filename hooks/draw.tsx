@@ -321,7 +321,7 @@ export function drawHome(
           ) : null}
         </Box>
       ) : (
-        <Text dimColor>Hover a highlighted word in a reply to peek; click it (or pick one below) for more.</Text>
+        <Text dimColor>Hover a highlighted word in a reply to peek; click it (or pick one below) for more. Esc or /osmosis close hides this pane.</Text>
       )}
       {w && example ? (
         example.status === 'ok' ? (
@@ -352,11 +352,11 @@ export function drawHome(
           <Button key="known" hotkey="k" plain onPress={() => act.toggleKnown(w)}>{isKnown ? 'Not known yet' : 'I know this'}</Button>
           <Button key="prev" hotkey="p" plain onPress={() => act.step(-1)}>Prev</Button>
           <Button key="next" hotkey="n" plain onPress={() => act.step(1)}>Next word</Button>
-          <Button key="close" hotkey="x" plain onPress={act.close}>Close</Button>
+          <Button key="close" hotkey="x" plain role="dismiss" onPress={act.close}>Close</Button>
         </Box>
       ) : (
         <Box flexDirection="row">
-          <Button key="close" hotkey="x" plain onPress={act.close}>Close</Button>
+          <Button key="close" hotkey="x" plain role="dismiss" onPress={act.close}>Close</Button>
         </Box>
       )}
       <Box flexDirection="column">
@@ -407,7 +407,7 @@ export function drawBank(els: Els, progress: OsmosisProgress, act: PaneActions):
       )}
       <Box flexDirection="row" columnGap={2}>
         <Button key="home" hotkey="h" plain onPress={act.home}>Back</Button>
-        <Button key="close" hotkey="x" plain onPress={act.close}>Close</Button>
+        <Button key="close" hotkey="x" plain role="dismiss" onPress={act.close}>Close</Button>
       </Box>
     </Box>
   ) as RenderElement
@@ -421,7 +421,7 @@ export function drawQuiz(els: Els, quiz: OsmosisQuiz | null, act: PaneActions): 
         <Text>Not enough words for a quiz yet. Read a few translated replies (or save words), then try /osmosis quiz again.</Text>
         <Box flexDirection="row" columnGap={2}>
           <Button key="home" hotkey="h" plain onPress={act.home}>Back</Button>
-          <Button key="close" hotkey="x" plain onPress={act.close}>Close</Button>
+          <Button key="close" hotkey="x" plain role="dismiss" onPress={act.close}>Close</Button>
         </Box>
       </Box>
     ) as RenderElement
@@ -436,7 +436,7 @@ export function drawQuiz(els: Els, quiz: OsmosisQuiz | null, act: PaneActions): 
         <Box flexDirection="row" columnGap={2}>
           <Button key="retake" hotkey="r" plain onPress={act.retake}>New quiz</Button>
           <Button key="home" hotkey="h" plain onPress={act.home}>Back</Button>
-          <Button key="close" hotkey="x" plain onPress={act.close}>Close</Button>
+          <Button key="close" hotkey="x" plain role="dismiss" onPress={act.close}>Close</Button>
         </Box>
       </Box>
     ) as RenderElement
@@ -456,7 +456,7 @@ export function drawQuiz(els: Els, quiz: OsmosisQuiz | null, act: PaneActions): 
       </Box>
       {quiz.feedback ? <Text dimColor>{quiz.feedback}</Text> : null}
       <Box flexDirection="row" columnGap={2}>
-        <Button key="close" hotkey="x" plain onPress={act.close}>Close</Button>
+        <Button key="close" hotkey="x" plain role="dismiss" onPress={act.close}>Close</Button>
       </Box>
     </Box>
   ) as RenderElement

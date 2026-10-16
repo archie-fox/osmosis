@@ -482,3 +482,15 @@ describe('chunking a long block', () => {
     expect(text.slice(chunks[3]!.start, chunks[3]!.end).trim().endsWith('D sentence 14 ends here.')).toBe(true)
   })
 })
+
+import { mdRows } from '../hooks/core'
+
+describe('markdown row estimate', () => {
+  test('code fences and emphasis marks take no rows or cells', () => {
+    expect(mdRows('**Fix:** type this:\n\n```\n/tui fullscreen\n```', 80)).toBe(3)
+    expect(mdRows(`**${'a'.repeat(10)}**`, 10)).toBe(1)
+  })
+  test('a table draws a border line above and a rule under each row', () => {
+    expect(mdRows('| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n\nafter', 80)).toBe(9)
+  })
+})
