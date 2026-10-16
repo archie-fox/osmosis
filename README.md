@@ -1,5 +1,7 @@
 # Osmosis 中文
 
+![Osmosis demo: Chinese words appear in a Claude Code reply, a card floats over a hovered word, and a side pane shows the word, an example sentence, and settings](docs/demo.gif)
+
 Osmosis is a Claude Code plugin that teaches you Mandarin while you work. It shows some English words in Claude's replies as Chinese characters, so you pick up vocabulary by osmosis while you read. The change is on your screen only. Claude never sees it, and the saved conversation does not change. Point at a Chinese word to see its meaning, or click it for a full card with pinyin, an example sentence, and a voice.
 
 ## Install
@@ -22,14 +24,14 @@ Requirements:
 
 - Claude Code 2.1.275 or later.
 - The fullscreen layout, for hover and click. Add `"tui": "fullscreen"` to your Claude Code settings.
-- Osmosis calls Claude Haiku to pick and translate words. The calls run on your own Claude login.
+- Osmosis calls Claude Haiku to pick and translate words. The calls run on your own Claude login. You can use a local model instead (see below).
 - macOS for the Speak button, which uses the built-in `say` command. On other systems, Speak shows a message.
 
 ## How to use it
 
 - Read a reply as usual. A few words show in Chinese, underlined and in color.
 - Point at a Chinese word. A small card shows next to the word: the characters, pinyin, word type, meaning, a character-by-character breakdown, and the HSK level. The "Hover card" setting can move this card to the bar above the prompt.
-- Click a Chinese word. A side pane opens with the full card, an example sentence, and buttons.
+- Click a Chinese word. A side pane opens with the full card, an example sentence, and buttons. The example loads when you open the word.
 - In the pane, press these keys (click the pane first):
   - `s`: say the word and the example aloud in a Chinese voice.
   - `b`: save the word to your word bank, or remove it.
@@ -38,7 +40,9 @@ Requirements:
   - `x`: close the pane.
 - The pane also lists all the Chinese words of the reply. Click one to open it.
 
-A reply shows in English first. The Chinese words show a second or two later, when the translation is ready. Short replies, code, file paths, tables, and headings stay in English.
+A reply shows in English first. The Chinese words show a second or two later, when Claude has finished the reply and the translation is ready. Only the last text block of each reply is translated: short status lines between tool calls stay in English. Short replies, code, file paths, tables, and headings also stay in English.
+
+Each word is checked against the CC-CEDICT dictionary. The dictionary sets the pinyin, the HSK level, and the character-by-character breakdown. The card shows `✓ CC-CEDICT` for a checked word, or `unverified` when the dictionary does not have it.
 
 ## Settings
 
@@ -50,9 +54,14 @@ Type `/osmosis` to open the pane. Its Settings section has a button for each cho
 - **Show**: Hanzi (characters), Pinyin, or Both.
 - **Hover card**: At the word (the default: the card shows next to the word you point at), In the bar (a one-line card in the bar above the prompt), or Both.
 - **Hover bar**: On or Off. Press `v` to switch. Off hides the bar above the prompt, and its card too.
+- **Status line**: On or Off. Off hides the `🌱 中文 · <level>` entry under the prompt.
+- **Daily cap**: Off, 100k, 300k (the default), or 1M Haiku tokens per day. At the cap, Osmosis starts no new translations until the next day, replies stay in English, and the bar says "daily cap reached". The cap counts Haiku tokens only.
+- **Model**: Haiku (the default) or Local. See "Run it on a local model".
 - **Word bank** (`w`) and **Quiz** (`q`) open those views.
 
-Settings, saved words, and progress stay between sessions.
+The pane also shows the token count, for example `Today: 42 calls · 96k tokens (71k in / 25k out) · 7 days: 410k`. Local model tokens show on a separate line.
+
+Settings, saved words, progress, and the token count stay between sessions.
 
 ## Commands
 
@@ -67,18 +76,53 @@ The same settings also work as typed commands:
 | `/osmosis show hanzi` | Sets how a word shows: `hanzi`, `pinyin`, or `both`. |
 | `/osmosis card word` | Sets where the hover card shows: `word` (next to the word), `bar` (in the bar above the prompt), or `both`. |
 | `/osmosis band on` / `/osmosis band off` | Shows or hides the hover bar above the prompt. |
+| `/osmosis status on` / `/osmosis status off` | Shows or hides the Osmosis entry in the status line. |
+| `/osmosis cap 300k` | Sets the daily cap: `off`, `100k`, `300k`, or `1m` Haiku tokens. |
+| `/osmosis model haiku` | Sets the model: `haiku` or `local`. |
+| `/osmosis endpoint <url>` | Sets the local server address. The default is `http://127.0.0.1:8080/v1`. |
+| `/osmosis local-model <name>` | Sets the model name sent to the local server. Ollama and LM Studio need it. |
 | `/osmosis bank` | Opens your word bank. Each word has "say" and "unsave" buttons. |
 | `/osmosis quiz` | Starts a 5-question quiz from your saved and recent words. Press `1`-`4` to answer. A word you get right 3 times becomes "known". |
 | `/osmosis lang <name>` | Sets the language. Mandarin is the default and the tested language. |
 
-The status line shows `🌱 中文 · <level>` while Osmosis is on.
+The status line shows `🌱 中文 · <level>` while Osmosis is on, unless you turn it off.
 
 ## Good to know
 
-- Each long reply costs one small Haiku call. Osmosis remembers old translations, so old replies show again at once.
+- Each finished reply costs one small Haiku call. Opening a word for its example costs one more small call, once per word. Osmosis remembers old translations and examples, so they show again at once.
 - If a translation fails, the reply shows in plain English.
 - A typed command prints one short line, for example "Osmosis level: beginner." Claude sees that line, as it sees any command output. The pane buttons print nothing.
 
+## Run it on a local model
+
+Osmosis can use a model on your own computer instead of Claude Haiku. It sends requests to any server with an OpenAI-compatible chat completions API. Nothing goes to Claude for translation then, and the daily cap does not apply.
+
+1. Install [llama.cpp](https://github.com/ggml-org/llama.cpp), then start its server with a small instruct model. This example downloads Qwen3 4B Instruct (about 2.5 GB) on first run:
+
+   ```
+   llama-server -hf unsloth/Qwen3-4B-Instruct-2507-GGUF:Q4_K_M --port 8080
+   ```
+
+2. In Claude Code, type:
+
+   ```
+   /osmosis model local
+   ```
+
+Other servers work too:
+
+- Ollama: `/osmosis endpoint http://127.0.0.1:11434/v1`, then `/osmosis local-model <model name>`.
+- LM Studio: `/osmosis endpoint http://127.0.0.1:1234/v1`, then `/osmosis local-model <model name>`.
+
+Osmosis asks the server for JSON that matches a schema. If the server refuses the schema, Osmosis asks again without it and checks the reply the same way. If the server does not answer, the reply stays in English and the bar says "local model unreachable". Osmosis never switches to Haiku by itself. The CC-CEDICT check runs on local results too, so it fixes most pinyin and HSK mistakes of a small model.
+
+## Credits
+
+- [CC-CEDICT](https://www.mdbg.net/chinese/dictionary?page=cc-cedict), by the CC-CEDICT contributors, published by MDBG under the [Creative Commons Attribution-ShareAlike 4.0 International License](https://creativecommons.org/licenses/by-sa/4.0/). It gives the pinyin, the short meanings, and the character breakdown. Osmosis ships an adapted copy of the 2026-10-14 release: the pinyin is converted to tone marks, and each reading keeps one short meaning. The adapted copy is shared under the same license.
+- The HSK 2.0 word lists (levels 1-6) from [complete-hsk-vocabulary](https://github.com/drkameleon/complete-hsk-vocabulary) by Yanis Zafirópulos, under the MIT License. They give the HSK levels.
+
+The files in `data/` come from these sources and stay under their licenses. `scripts/build-dict.mjs` rebuilds `data/` from them: run `node scripts/build-dict.mjs`.
+
 ## License
 
-MIT. See [LICENSE](LICENSE).
+The code is MIT. See [LICENSE](LICENSE). The files in `data/` are under the licenses in [data/README.md](data/README.md).

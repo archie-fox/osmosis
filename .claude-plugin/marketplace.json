@@ -1,6 +1,14 @@
 {
   "name": "osmosis",
   "description": "Osmosis: learn Mandarin while you read Claude's replies.",
-  "owner": { "name": "raylrcheng" },
-  "plugins": [{ "name": "osmosis", "source": "./" }]
+  "owner": {
+    "name": "raylrcheng"
+  },
+  "plugins": [
+    {
+      "name": "osmosis",
+      "source": "./",
+      "version": "0.2.0"
+    }
+  ]
 }

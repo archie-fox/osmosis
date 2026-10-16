@@ -15,7 +15,12 @@ export const DEFAULT_SETTINGS: OsmosisSettings = {
   density: 'normal',
   show: 'hanzi',
   isBandOn: true,
+  isStatusOn: true,
   card: 'word',
+  cap: '300k',
+  model: 'haiku',
+  endpoint: 'http://127.0.0.1:8080/v1',
+  localModel: '',
   lang: 'Mandarin',
 }
 
@@ -320,14 +325,12 @@ Rules:
 8. Reply with strict JSON only: one array, no prose, no code fence. If nothing fits, reply [].
 
 Each item has exactly these fields:
-{"en": "computer", "occurrence": 1, "target": "电脑", "romanization": "diànnǎo", "pos": "noun", "gloss": "computer", "literal": "电 electric + 脑 brain", "example_target": "我的电脑很快。", "example_romanization": "Wǒ de diànnǎo hěn kuài.", "example_en": "My computer is fast.", "level": 1}
+{"en": "computer", "occurrence": 1, "target": "电脑", "romanization": "diànnǎo", "pos": "noun", "gloss": "computer", "level": 1}
 
 - target: the word in the target language (for Mandarin: simplified hanzi).
 - romanization: for Mandarin, pinyin with tone marks; for a language in Latin script, "".
 - pos: noun, verb, adjective, adverb, phrase or idiom.
 - gloss: a short English meaning in this context.
-- literal: a part-by-part breakdown (for Mandarin, character by character).
-- example_*: one short, simple example sentence that uses the word, its romanization and its English.
 - level: HSK level 1-6 for Mandarin; for other languages the CEFR step as 1-6 (A1=1 ... C2=6); null if unsure.`
 
 const LEVEL_RULES: Record<OsmosisLevel, { zh: string; other: string }> = {
@@ -556,7 +559,7 @@ export function cardLines(w: OsmosisWord): string[] {
     `${w.target}  ${w.romanization}`.trim(),
     [w.pos, w.gloss].filter(Boolean).join(' \u00b7 '),
     w.literal,
-    [w.level ? `HSK ${w.level}` : '', 'click for more'].filter(Boolean).join(' \u00b7 '),
+    [w.level ? `HSK ${w.level}` : '', w.verified === true ? '\u2713' : w.verified === false ? 'unverified' : '', 'click for more'].filter(Boolean).join(' \u00b7 '),
   ].filter(Boolean)
 }
 
@@ -584,4 +587,34 @@ export function padCells(s: string, cells: number): string {
     out += ch
   }
   return out + ' '.repeat(Math.max(0, cells - cellWidth(out)))
+}
+
+// ---------- which blocks to translate ----------
+
+export function normText(s: string): string {
+  return s.replace(/\s+/g, ' ').trim()
+}
+
+export function isFinalBlock(text: string, finals: readonly string[]): boolean {
+  const n = normText(text)
+  if (n.length === 0) return false
+  return finals.some(f => f === n || (n.length >= MIN_CHARS && f.endsWith(n)))
+}
+
+export type HistoryRow = { role: 'user' | 'assistant'; text: string; toolUses: readonly unknown[]; toolResults?: readonly unknown[] }
+
+export function finalsFromHistory(rows: readonly HistoryRow[]): string[] {
+  const out: string[] = []
+  let last = ''
+  for (const row of rows) {
+    if (row.role === 'assistant') {
+      if (row.toolUses.length > 0) last = ''
+      else if (row.text.trim()) last = row.text
+    } else if (!row.toolResults || row.toolResults.length === 0) {
+      if (last) out.push(normText(last))
+      last = ''
+    }
+  }
+  if (last) out.push(normText(last))
+  return out
 }

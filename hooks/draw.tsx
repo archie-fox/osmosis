@@ -8,14 +8,19 @@ import type {
 } from 'claude-code'
 
 import type {
+  OsmosisExample,
   OsmosisProgress,
   OsmosisQuiz,
   OsmosisRecentWord,
   OsmosisSettings,
+  OsmosisUsage,
   OsmosisWord,
 } from '../types'
 import { cardLines, cellWidth, langInfo, padCells, placeCard, placeSwaps, scopeFor, shownText } from './core'
+import { usageLines } from './providers'
 import type { OnScreenRows, Part, Segment, SwapSpot, Token } from './core'
+
+export type ExampleView = OsmosisExample | { status: 'loading' } | { status: 'cap' }
 
 export type Els = {
   Box: ElementConstructor<BoxProps>
@@ -173,10 +178,13 @@ export function drawBand(
   s: OsmosisSettings,
   todayCount: number,
   columns: number,
+  notice = '',
 ): RenderElement {
   const { Box, Text } = els
   const info = langInfo(s.lang)
-  const compact = `Osmosis ${info.label} · ${s.level} · ${todayCount} words today · /osmosis`
+  const compact = notice
+    ? `Osmosis ${info.label} · ${notice} · replies stay in English · /osmosis`
+    : `Osmosis ${info.label} · ${s.level} · ${todayCount} words today · /osmosis`
   return (
     <Box flexDirection="row">
       <Box flexDirection="row" flexShrink={0}>
@@ -226,7 +234,7 @@ function choiceRow<V extends string>(
 ) {
   return (
     <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
-      <Box minWidth={11} flexShrink={0}>
+      <Box minWidth={12} flexShrink={0}>
         <Text dimColor>{title}</Text>
       </Box>
       {options.map(([value, label]) => {
@@ -245,6 +253,8 @@ const ON_OFF = [['on', 'On'], ['off', 'Off']] as const
 const LEVELS = [['beginner', 'Beginner'], ['intermediate', 'Intermediate'], ['advanced', 'Advanced']] as const
 const DENSITIES = [['low', 'Low'], ['normal', 'Normal'], ['high', 'High']] as const
 const SHOWS = [['hanzi', 'Hanzi'], ['pinyin', 'Pinyin'], ['both', 'Both']] as const
+const CAPS = [['off', 'Off'], ['100k', '100k'], ['300k', '300k'], ['1m', '1M']] as const
+const MODELS = [['haiku', 'Haiku'], ['local', 'Local']] as const
 const CARDS = [['word', 'At the word'], ['bar', 'In the bar'], ['both', 'Both']] as const
 
 export function drawSettings(els: Els, s: OsmosisSettings, act: PaneActions) {
@@ -260,6 +270,12 @@ export function drawSettings(els: Els, s: OsmosisSettings, act: PaneActions) {
       {choiceRow(els, 'Show', 'show', SHOWS, s.show, v => act.setSettings({ show: v }))}
       {choiceRow(els, 'Hover card', 'card', CARDS, s.card, v => act.setSettings({ card: v }))}
       {choiceRow(els, 'Hover bar', 'bar', ON_OFF, bar, v => act.setSettings({ isBandOn: v === 'on' }), v => (v === bar ? undefined : 'v'))}
+      {choiceRow(els, 'Status line', 'status', ON_OFF, s.isStatusOn ? 'on' : 'off', v => act.setSettings({ isStatusOn: v === 'on' }))}
+      {choiceRow(els, 'Daily cap', 'cap', CAPS, s.cap, v => act.setSettings({ cap: v }))}
+      {choiceRow(els, 'Model', 'model', MODELS, s.model, v => act.setSettings({ model: v }))}
+      {s.model === 'local' ? (
+        <Text dimColor>{`Local endpoint: ${s.endpoint}${s.localModel ? ` (${s.localModel})` : ''} \u00b7 change with /osmosis endpoint <url>`}</Text>
+      ) : null}
       <Box flexDirection="row" columnGap={1} marginTop={1}>
         <Button key="view-bank" label="Word bank" hotkey="w" onPress={() => act.openView('bank')} />
         <Button key="view-quiz" label="Quiz" hotkey="q" onPress={() => act.openView('quiz')} />
@@ -276,6 +292,9 @@ export function drawHome(
   selected: number | null,
   progress: OsmosisProgress,
   act: PaneActions,
+  example: ExampleView | null = null,
+  usage: OsmosisUsage = { days: {} },
+  today = '',
 ): RenderElement {
   const { Box, Text, Button } = els
   const w = selected === null ? undefined : words[selected]
@@ -293,16 +312,31 @@ export function drawHome(
           </Text>
           <Text>{w.gloss}</Text>
           {w.literal ? <Text dimColor>{w.literal}</Text> : null}
+          {w.verified === true ? (
+            <Text dimColor>{`\u2713 CC-CEDICT${w.dictGloss && w.dictGloss !== w.gloss ? `: ${w.dictGloss}` : ''}`}</Text>
+          ) : w.verified === false ? (
+            <Text dimColor>unverified</Text>
+          ) : null}
         </Box>
       ) : (
         <Text dimColor>Hover a highlighted word in a reply to peek; click it (or pick one below) for more.</Text>
       )}
-      {w && w.exampleTarget ? (
-        <Box flexDirection="column">
-          <Text>{w.exampleTarget}</Text>
-          {w.exampleRomanization ? <Text dimColor>{w.exampleRomanization}</Text> : null}
-          {w.exampleEn ? <Text italic>{w.exampleEn}</Text> : null}
-        </Box>
+      {w && example ? (
+        example.status === 'ok' ? (
+          <Box flexDirection="column">
+            <Text>{example.target}</Text>
+            {example.romanization ? <Text dimColor>{example.romanization}</Text> : null}
+            {example.en ? <Text italic>{example.en}</Text> : null}
+          </Box>
+        ) : (
+          <Text dimColor>
+            {example.status === 'loading'
+              ? 'loading example...'
+              : example.status === 'cap'
+                ? 'Daily cap reached: no new example today.'
+                : 'No example available.'}
+          </Text>
+        )
       ) : null}
       {w ? (
         <Text dimColor>
@@ -335,6 +369,13 @@ export function drawHome(
         ))}
       </Box>
       {drawSettings(els, s, act)}
+      {today ? (
+        <Box flexDirection="column">
+          {usageLines(usage, today).map(line => (
+            <Text dimColor>{line}</Text>
+          ))}
+        </Box>
+      ) : null}
     </Box>
   ) as RenderElement
 }

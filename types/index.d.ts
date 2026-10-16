@@ -2,6 +2,8 @@ export type OsmosisLevel = 'beginner' | 'intermediate' | 'advanced'
 export type OsmosisDensity = 'low' | 'normal' | 'high'
 export type OsmosisShow = 'hanzi' | 'both' | 'pinyin'
 export type OsmosisCard = 'word' | 'bar' | 'both'
+export type OsmosisCap = 'off' | '100k' | '300k' | '1m'
+export type OsmosisProvider = 'haiku' | 'local'
 
 export type OsmosisSettings = {
   isOn: boolean
@@ -9,7 +11,12 @@ export type OsmosisSettings = {
   density: OsmosisDensity
   show: OsmosisShow
   isBandOn: boolean
+  isStatusOn: boolean
   card: OsmosisCard
+  cap: OsmosisCap
+  model: OsmosisProvider
+  endpoint: string
+  localModel: string
   lang: string
 }
 
@@ -27,11 +34,23 @@ export type OsmosisWord = {
   level: number | null
   start: number
   end: number
+  verified?: boolean
+  dictGloss?: string
 }
 
 export type OsmosisTx =
   | { status: 'ok'; words: OsmosisWord[] }
   | { status: 'failed'; reason: string }
+
+export type OsmosisExample =
+  | { status: 'ok'; target: string; romanization: string; en: string }
+  | { status: 'failed' }
+
+export type OsmosisTally = { calls: number; input: number; output: number; cacheRead: number; cacheWrite: number }
+
+export type OsmosisUsage = { days: Record<string, Partial<Record<OsmosisProvider, OsmosisTally>>> }
+
+export type OsmosisHealth = { local: 'ok' | 'down' | 'unknown' }
 
 export type OsmosisRecentWord = { key: string; index: number; word: OsmosisWord }
 
@@ -81,6 +100,10 @@ declare module 'claude-code' {
       view: OsmosisView
       quiz: OsmosisQuiz | null
       progress: OsmosisProgress
+      finals: string[]
+      usage: OsmosisUsage
+      ex: StateFamily<OsmosisExample>
+      health: OsmosisHealth
     }
   }
 }

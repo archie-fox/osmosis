@@ -175,3 +175,81 @@ describe('voice pick', () => {
     expect(pickVoice('Samantha            en_US    # Hello')).toBe(undefined)
   })
 })
+
+import { finalsFromHistory, isFinalBlock, RULES } from '../hooks/core'
+import { bestReading, literalFor, parseCedict, parseHsk, verifyWord } from '../hooks/dict'
+import { addUsage, EMPTY_USAGE, isCapReached, localRequest, parseLocalReply, usageLines } from '../hooks/providers'
+
+describe('which block is translated', () => {
+  test('only the last text of each reply counts as final', () => {
+    const rows = [
+      { role: 'user' as const, text: 'fix it', toolUses: [] },
+      { role: 'assistant' as const, text: 'Now checking the build logs for you.', toolUses: [] },
+      { role: 'assistant' as const, text: '', toolUses: [{ name: 'Bash' }] },
+      { role: 'user' as const, text: '', toolUses: [], toolResults: [{ ok: true }] },
+      { role: 'assistant' as const, text: 'The build  is green again\nafter the fix.', toolUses: [] },
+      { role: 'user' as const, text: 'thanks', toolUses: [] },
+      { role: 'assistant' as const, text: 'You are welcome, happy to help any time.', toolUses: [] },
+    ]
+    const finals = finalsFromHistory(rows)
+    expect(finals).toEqual(['The build is green again after the fix.', 'You are welcome, happy to help any time.'])
+    expect(isFinalBlock('The build is green again\n\nafter the fix.', finals)).toBe(true)
+    expect(isFinalBlock('Now checking the build logs for you.', finals)).toBe(false)
+  })
+
+  test('the word prompt asks for no example and no literal fields', () => {
+    expect(RULES).not.toContain('example_target')
+    expect(RULES).not.toContain('"literal"')
+  })
+})
+
+describe('CC-CEDICT check', () => {
+  const dict = {
+    words: parseCedict('行\tháng\trow\txíng\tto walk\n电\tdiàn\telectric\n脑\tnǎo\tbrain\n电脑\tdiànnǎo\tcomputer'),
+    hsk: parseHsk('电脑\t1\n行\t4\n'),
+  }
+  const word = (target: string, romanization: string, level: number | null) => ({
+    en: 'x', occurrence: 1, target, romanization, pos: 'noun', gloss: 'x', literal: 'junk',
+    exampleTarget: '', exampleRomanization: '', exampleEn: '', level, start: 0, end: 1,
+  })
+
+  test('a polyphone takes the reading closest to the model', () => {
+    expect(bestReading(dict.words.get('行')!, 'xing').reading).toBe('xíng')
+    expect(bestReading(dict.words.get('行')!, 'háng').reading).toBe('háng')
+  })
+
+  test('a wrong pinyin and a wrong HSK level are corrected; literal comes from the dictionary', () => {
+    const w = verifyWord(word('电脑', 'diannao3', 4), dict)
+    expect([w.romanization, w.level, w.verified, w.literal]).toEqual(['diànnǎo', 1, true, '电 electric + 脑 brain'])
+  })
+
+  test('a word the dictionary lacks stays unverified with the model values', () => {
+    const w = verifyWord(word('笔记', 'bǐjì', 2), dict)
+    expect([w.romanization, w.level, w.verified, w.literal]).toEqual(['bǐjì', 2, false, 'junk'])
+    expect(literalFor('电子', dict, 'kept')).toBe('kept')
+  })
+})
+
+describe('usage, cap and the local request', () => {
+  test('usage adds up per day and provider and formats in k', () => {
+    let u = addUsage(EMPTY_USAGE, '2026-10-15', 'haiku', { input: 70_000, output: 25_000, cacheRead: 1000, cacheWrite: 0 })
+    u = addUsage(u, '2026-10-14', 'haiku', { input: 300_000, output: 14_000, cacheRead: 0, cacheWrite: 0 })
+    expect(u.days['2026-10-15']?.haiku?.calls).toBe(1)
+    expect(usageLines(u, '2026-10-15')[0]).toBe('Today: 1 calls · 96k tokens (71k in / 25k out) · 7 days: 410k')
+    const s = { ...DEFAULT_SETTINGS, cap: '100k' as const }
+    expect(isCapReached(u, '2026-10-15', s)).toBe(false)
+    expect(isCapReached(u, '2026-10-14', s)).toBe(true)
+    expect(isCapReached(u, '2026-10-14', { ...s, model: 'local' })).toBe(false)
+  })
+
+  test('the local request is an OpenAI chat completion with a JSON schema array', () => {
+    const r = localRequest({ endpoint: 'http://127.0.0.1:8080/v1/', localModel: '' }, 'RULES', 'PROMPT', { type: 'array' }, 100)
+    expect(r.url).toBe('http://127.0.0.1:8080/v1/chat/completions')
+    const body = JSON.parse(r.body)
+    expect(body.messages.map((m: { role: string }) => m.role)).toEqual(['system', 'user'])
+    expect(body.response_format.type).toBe('json_schema')
+    expect(body.response_format.json_schema.schema.type).toBe('array')
+    expect(parseLocalReply('{"choices":[{"message":{"content":"[]"}}],"usage":{"prompt_tokens":5,"completion_tokens":2}}')?.usage.input).toBe(5)
+    expect(parseLocalReply('<html>')).toBe(null)
+  })
+})
