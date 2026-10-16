@@ -72,7 +72,9 @@ const MAX_FINALS = 200
 const EXAMPLE_ITEMS = 500
 const LOCAL_TIMEOUT_MS = 90_000
 // Haiku 4.5 runs without thinking unless asked; the `haiku` alias thinks by default.
-const HAIKU = 'claude-haiku-4-5'
+const HAIKU = 'claude-haiku-5-5'
+// Haiku 5.5 always thinks; leave room so thinking never truncates the answer.
+const THINK_ROOM = 3000
 const EXAMPLE_SYSTEM = 'You write short example sentences for a language learner. Reply with strict JSON only.'
 
 const settingsAtom = atom({ plugin: 'osmosis', key: 'settings' } as const, DEFAULT_SETTINGS)
@@ -431,10 +433,11 @@ async function callHaiku($: $T, prompt: string, isWords: boolean, maxTokens: num
     model: HAIKU,
     prompt: isWords ? [{ text: RULES, cache: true }, { text: prompt }] : prompt,
     ...(isWords ? {} : { system: EXAMPLE_SYSTEM }),
-    maxTokens,
+    maxTokens: maxTokens + THINK_ROOM,
+    effort: 'low',
     timeoutMs: 60000,
   })
-  note(`call model=${HAIKU} effort=none maxTokens=${maxTokens} in=${r.usage.input_tokens} out=${r.usage.output_tokens}`)
+  note(`call model=${HAIKU} effort=low maxTokens=${maxTokens + THINK_ROOM} in=${r.usage.input_tokens} out=${r.usage.output_tokens}`)
   await recordUsage($, 'haiku', fromModelUsage(r.usage))
   return r.isAnswered ? { ok: true, text: r.text } : { ok: false, reason: r.reason }
 }
