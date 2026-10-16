@@ -16,7 +16,7 @@ import type {
   OsmosisUsage,
   OsmosisWord,
 } from '../types'
-import { SETTING_ROWS, cardLines, cellWidth, fitCells, langInfo, padCells, scopeFor, shownText } from './core'
+import { SETTING_ROWS, SPEAKER, cardLines, cellWidth, fitCells, langInfo, padCells, scopeFor, shownText } from './core'
 import { usageLines } from './providers'
 import type { CardPlace, Part, Segment, Token } from './core'
 
@@ -51,7 +51,7 @@ function drawWord(els: Els, w: OsmosisWord, scope: string, s: OsmosisSettings, k
   )
 }
 
-function drawCard({ Box, Text }: Els, w: OsmosisWord, scope: string, p: Extract<CardPlace, { kind: 'above' | 'below' }>) {
+function drawCard({ Box, Text, Button }: Els, w: OsmosisWord, scope: string, p: Extract<CardPlace, { kind: 'above' | 'below' }>, say: () => void) {
   const lines = cardLines(w)
   const head = cellWidth(w.target)
   return (
@@ -69,11 +69,15 @@ function drawCard({ Box, Text }: Els, w: OsmosisWord, scope: string, p: Extract<
     >
       {lines.map((line, i) =>
         i === 0 ? (
-          <Text>
-            {' '}
-            <Text bold color={LEARN_COLOR}>{w.target}</Text>
-            {`${padCells(line.slice(w.target.length), Math.max(0, p.inner - head))} `}
-          </Text>
+          <Box flexDirection="row">
+            <Text>
+              {' '}
+              <Text bold color={LEARN_COLOR}>{w.target}</Text>
+              {`${padCells(line.slice(w.target.length), Math.max(0, p.inner - head - 2))}`}
+            </Text>
+            <Button key={`say-${scope}`} label={SPEAKER} plain onPress={say}>{SPEAKER}</Button>
+            <Text> </Text>
+          </Box>
         ) : (
           <Text dimColor={i === lines.length - 1}>{` ${padCells(line, p.inner)} `}</Text>
         ),
@@ -113,6 +117,7 @@ export function drawMessage(
   s: OsmosisSettings,
   pick: (i: number) => void,
   cards: Map<number, CardPlace> | null,
+  say: (i: number) => void = () => {},
 ): RenderElement {
   const { Box, Text, Markdown } = els
   return (
@@ -144,7 +149,7 @@ export function drawMessage(
       </Box>
       {cards
         ? [...cards.entries()].map(([index, plan]) =>
-            plan.kind === 'bar' ? null : drawCard(els, words[index]!, scopeFor(msgKey, index), plan),
+            plan.kind === 'bar' ? null : drawCard(els, words[index]!, scopeFor(msgKey, index), plan, () => say(index)),
           )
         : null}
     </Box>

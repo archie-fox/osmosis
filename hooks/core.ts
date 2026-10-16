@@ -694,6 +694,9 @@ export function placeSwaps(
 }
 
 export const CARD_MAX = 40
+// The card's first row ends in a speaker button: a space and a wide glyph.
+export const SPEAKER = '\u{1F50A}'
+const SPEAKER_CELLS = 3
 
 export function cardLines(w: OsmosisWord): string[] {
   return [
@@ -720,7 +723,7 @@ export function placeCard(
   onScreen: OnScreenRows,
   columns: number,
 ): CardPlace {
-  const widest = Math.max(...lines.map(cellWidth))
+  const widest = Math.max(...lines.map((l, i) => cellWidth(l) + (i === 0 ? SPEAKER_CELLS : 0)))
   const inner = Math.max(4, Math.min(widest, CARD_MAX - 4, columns - GUTTER - 4))
   const width = inner + 4
   const height = lines.length + 2
@@ -731,6 +734,8 @@ export function placeCard(
   const belowTop = spot.row + 1
   const belowEnd = belowTop + height - 1
   if (belowEnd < totalRows && (!onScreen || site(belowEnd) <= onScreen.last)) return { kind: 'below', top: belowTop, left, inner, height }
+  // Fullscreen clips to the viewport, so a short message's card may cover the reply above.
+  if (onScreen && onScreen.first === 0) return { kind: 'above', top: aboveTop, left, inner, height }
   return { kind: 'bar' }
 }
 

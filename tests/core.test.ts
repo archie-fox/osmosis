@@ -301,6 +301,11 @@ describe('floating card placement', () => {
     expect(placeCard(spot(0), lines, 7, undefined, 100)).toMatchObject({ kind: 'below', top: 1 })
     expect(placeCard(spot(0), lines, 6, undefined, 100)).toEqual({ kind: 'bar' })
   })
+  test('a short message whose top is on screen spills its card above it', () => {
+    expect(placeCard(spot(1), lines, 2, { first: 0, last: 2 }, 100)).toMatchObject({ kind: 'above', top: -5 })
+    expect(placeCard(spot(1), lines, 2, { first: 1, last: 2 }, 100)).toEqual({ kind: 'bar' })
+    expect(placeCard(spot(1), lines, 2, null, 100)).toEqual({ kind: 'bar' })
+  })
 })
 
 import { revertCopy } from '../hooks/copyback'

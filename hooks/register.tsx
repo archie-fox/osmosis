@@ -826,7 +826,12 @@ function drawReply(
     })()
   const floating = cards ? [...cards.values()].filter(p => p.kind !== 'bar').length : 0
   note(`${status} swaps=${swaps} cards=${floating} bar=${cards ? cards.size - floating : 0}`)
-  return drawMessage(els, segs, words, key, view.isFirst, s, pick, cards)
+  const say = (index: number) => {
+    note(`say key=${key} index=${index}`)
+    const w = words[index]
+    if (w) void speak($, w, '')
+  }
+  return drawMessage(els, segs, words, key, view.isFirst, s, pick, cards, say)
 }
 
 

@@ -31,7 +31,7 @@ Requirements:
 ## How to use it
 
 - Read a reply as usual. A few words show in Chinese, underlined and in color.
-- Point at a Chinese word. A small card shows next to the word: the characters, pinyin, word type, meaning, a character-by-character breakdown, and the HSK level. The "Hover card" setting can move this card to the bar above the prompt.
+- Point at a Chinese word. A small card shows next to the word: the characters, pinyin, word type, meaning, a character-by-character breakdown, and the HSK level. Click 🔊 on the card to hear the word. The "Hover card" setting can move this card to the bar above the prompt.
 - Click a Chinese word. A side pane opens with the full card, an example sentence, and buttons. The example loads when you open the word.
 - In the pane, press these keys (click the pane first):
   - `s`: say the word and the example aloud in a Chinese voice.
@@ -55,7 +55,7 @@ Type `/osmosis` to open the pane. Its Settings section has a button for each cho
 - **Density** (Low, Normal, High): How many words swap: about 1 per 3 sentences, 1, or 2 per sentence.
 - **Show** (Hanzi, Pinyin, Both): Show swapped words as characters, pinyin, or both.
 - **Coverage** (Natural, Maximum): Natural keeps English grammar intact; Maximum swaps more words. Natural swaps nouns, adjectives and base-form verbs, plus a linking word that opens a sentence. Maximum gives more swaps, some read awkwardly in English word order, and allows a phrase at every level.
-- **Hover card** (At the word, In the bar, Both): Where the word card appears when you point at a word. With At the word, a word with no room next to it shows its card in the bar instead.
+- **Hover card** (At the word, In the bar, Both): Where the word card appears when you point at a word. With At the word, a card with no room in its own message shows above that message. If the top of the message is off screen, the card shows in the bar instead.
 - **Hover bar** (On, Off): The line above the prompt with today's count and bar cards. Press `v` to switch.
 - **Status line** (On, Off): The `🌱 中文 · <level>` entry under the prompt.
 - **Copy** (English, As shown): English pastes copied text in English; As shown does not.

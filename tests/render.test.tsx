@@ -487,6 +487,11 @@ const floating = (tree: unknown) => ((tree as Node).children ?? []).filter(c => 
 
 test('floating cards are the last children of the message root, revealed by the word scope', async ($, on) => {
   const { clock } = world(on, REPLY, {}, { history: [LOW_TEXT] })
+  const spoken: string[] = []
+  on('audio.speak', async ($, e) => {
+    spoken.push(e.text)
+    return { value: { via: 'system' as const } }
+  })
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
   const msg = await mountMsg($, LOW_TEXT)
   await settleAll(clock)
@@ -498,6 +503,11 @@ test('floating cards are the last children of the message root, revealed by the 
   expect(card.hover?.display).toBe('flex')
   expect(card.hover?.scope).toBe(hoverOf(tree, 'w-0')?.scope)
   expect(walk(walk(tree, n => n.props?.key === 'k-0')[0], n => n.props?.position === 'absolute')).toHaveLength(0)
+  const say = walk(card, n => typeof n.props?.key === 'string' && n.props.key.startsWith('say-'))[0]
+  expect(say?.props?.label).toBe('\u{1F50A}')
+  await msg.press({ key: say!.props!.key as string })
+  await settleAll(clock)
+  expect(spoken).toEqual(['电脑'])
 })
 
 test('a card goes below a first-row word, above a lower word, and to the bar at the end of a short message', async ($, on) => {
