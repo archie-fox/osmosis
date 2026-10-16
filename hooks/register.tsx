@@ -37,6 +37,9 @@ import {
   msToNextDay,
   scopeFor,
   swapCap,
+  chunkBlock,
+  mergeChunks,
+  MAX_SWAPS,
 } from './core'
 import type { CardPlace, HistoryRow, OnScreenRows, Segment } from './core'
 import { revertCopy } from './copyback'
@@ -92,7 +95,7 @@ const healthAtom = atom({ plugin: 'osmosis', key: 'health' } as const, { local: 
 const TX = { plugin: 'osmosis', key: 'tx' } as const
 const EX = { plugin: 'osmosis', key: 'ex' } as const
 
-type Job = { requestId: string; key: string; text: string; settings: OsmosisSettings; updatedAt: number }
+type Job = { requestId: string; key: string; text: string; settings: OsmosisSettings; updatedAt: number; queuedAt: number; isFinal: boolean }
 type ExJob = { id: string; target: string; romanization: string; gloss: string }
 
 type $T = EngineInterface
@@ -373,7 +376,7 @@ async function ensureDict($: $T): Promise<Dict> {
 
 // ---------- model calls ----------
 
-type CallResult = { ok: true; text: string } | { ok: false; reason: string }
+type CallResult = ({ ok: true; text: string } | { ok: false; reason: string }) & { usage?: CallUsage }
 
 function fromModelUsage(u: ModelUsage | undefined): CallUsage {
   return {
@@ -425,7 +428,7 @@ async function callLocal($: $T, s: OsmosisSettings, system: string, prompt: stri
   if (!reply) return { ok: false, reason: 'local-bad-reply' }
   note(`call model=local:${s.localModel || 'default'} maxTokens=${maxTokens} in=${reply.usage.input} out=${reply.usage.output}`)
   await recordUsage($, 'local', reply.usage)
-  return { ok: true, text: reply.text }
+  return { ok: true, text: reply.text, usage: reply.usage }
 }
 
 async function callHaiku($: $T, prompt: string, isWords: boolean, maxTokens: number): Promise<CallResult> {
@@ -438,8 +441,9 @@ async function callHaiku($: $T, prompt: string, isWords: boolean, maxTokens: num
     timeoutMs: 60000,
   })
   note(`call model=${HAIKU} effort=low maxTokens=${Math.max(maxTokens, MAX_OUT)} in=${r.usage.input_tokens} out=${r.usage.output_tokens}`)
-  await recordUsage($, 'haiku', fromModelUsage(r.usage))
-  return r.isAnswered ? { ok: true, text: r.text } : { ok: false, reason: r.reason }
+  const usage = fromModelUsage(r.usage)
+  await recordUsage($, 'haiku', usage)
+  return r.isAnswered ? { ok: true, text: r.text, usage } : { ok: false, reason: r.reason, usage }
 }
 
 // ---------- the translation worker ----------
@@ -525,28 +529,43 @@ async function translate($: $T, job: Job) {
   inflight++
   inflightKeys.add(job.key)
   try {
-    const cap = swapCap(job.text, job.settings.density)
-    if (cap === 0) return await settle($, job, [], true)
+    const s = job.settings
+    const chunks = chunkBlock(job.text)
+    const caps = chunks.map(c => swapCap(job.text.slice(c.start, c.end), s.density))
+    const total = Math.min(MAX_SWAPS, caps.reduce((a, b) => a + b, 0))
+    if (total === 0) return await settle($, job, [], true)
     const progress = await read($, progressAtom)
-    const prompt = buildPrompt(job.text, job.settings, reviewWords(progress), cap)
-    const r =
-      job.settings.model === 'local'
-        ? await callLocal($, job.settings, RULES + LOCAL_NOTE, prompt, wordsSchema(cap), 200 + cap * 80)
-        : await callHaiku($, prompt, true, 60 + cap * 30)
-    if (!r.ok) return await retryOrFail($, job, r.reason)
-    const isMandarin = langInfo(job.settings.lang).isMandarin
-    const parsed = parseReply(r.text, job.text, {
-      isMandarin,
-      known: new Set(Object.keys(progress.known)),
-      cap,
-      maxPhrases: phraseCap(job.settings.level, job.settings.coverage),
-      coverage: job.settings.coverage,
-    })
-    if (!parsed.ok) return await retryOrFail($, job, parsed.reason)
-    note(`translate key=${job.key} cap=${cap} kept=${parsed.words.length} replyChars=${r.text.length}`)
+    const isMandarin = langInfo(s.lang).isMandarin
+    const opts = { isMandarin, known: new Set(Object.keys(progress.known)), maxPhrases: phraseCap(s.level, s.coverage), coverage: s.coverage }
     const d = isMandarin ? await ensureDict($) : EMPTY_DICT
-    const checked = isMandarin ? parsed.words.map(w => verifyWord(w, d)) : parsed.words
-    await settle($, job, d.rows.size ? checked.filter(w => w.verified) : checked, true)
+    const lists: OsmosisWord[][] = chunks.map(() => [])
+    let landed = 0
+    let next = 0
+    const run = async (i: number) => {
+      const c = chunks[i]!
+      const sub = job.text.slice(c.start, c.end)
+      const prompt = buildPrompt(sub, s, reviewWords(progress), caps[i]!)
+      const t0 = (await $.clock.now()) - job.queuedAt
+      const r = s.model === 'local'
+        ? await callLocal($, s, RULES + LOCAL_NOTE, prompt, wordsSchema(caps[i]!), 200 + caps[i]! * 80)
+        : await callHaiku($, prompt, true, 60 + caps[i]! * 30)
+      const parsed = r.ok ? parseReply(r.text, sub, { ...opts, cap: caps[i]! }) : null
+      const t1 = (await $.clock.now()) - job.queuedAt
+      note(`chunk key=${job.key} ${i + 1}/${chunks.length} sentences=${c.sentences} ms=${t0}->${t1} in=${r.usage?.input ?? 0} out=${r.usage?.output ?? 0}${r.ok ? '' : ` fail=${r.reason}`}`)
+      if (!parsed?.ok) return
+      const placed = parsed.words.map(w => ({ ...w, start: w.start + c.start, end: w.end + c.start }))
+      const checked = isMandarin ? placed.map(w => verifyWord(w, d)) : placed
+      lists[i] = d.rows.size ? checked.filter(w => w.verified) : checked
+      landed++
+      await $.state.set({ ...TX, id: job.key }, { status: 'ok', words: mergeChunks(job.text, lists, total, opts.maxPhrases, opts.known) })
+    }
+    const worker = async () => {
+      while (next < chunks.length) await run(next++).catch(() => undefined)
+    }
+    await Promise.all(Array.from({ length: Math.min(4, chunks.length) }, worker))
+    if (landed === 0) return await retryOrFail($, job, 'no-chunk-answered')
+    await settle($, job, mergeChunks(job.text, lists, total, opts.maxPhrases, opts.known), true)
+    note(`block key=${job.key} chunks=${chunks.length} landed=${landed} wall=${(await $.clock.now()) - job.queuedAt}ms`)
   } catch {
     await retryOrFail($, job, 'error').catch(() => undefined)
   } finally {
@@ -597,7 +616,7 @@ async function tickOnce($: $T) {
     else if (!capped) void fetchExample($, job, s)
   }
   const ready = [...jobs.values()]
-    .filter(j => !inflightKeys.has(j.key) && (cache.has(j.key) || now - j.updatedAt >= SETTLE_MS))
+    .filter(j => !inflightKeys.has(j.key) && (cache.has(j.key) || j.isFinal || now - j.updatedAt >= SETTLE_MS))
     .sort((a, b) => b.updatedAt - a.updatedAt)
   for (const job of ready) {
     const hit = cache.get(job.key)
@@ -623,7 +642,7 @@ async function tickOnce($: $T) {
   const waiting = [...jobs.values()].filter(j => !inflightKeys.has(j.key))
   if (waiting.length === 0) return
   if (capped && waiting.every(j => j.settings.model === 'haiku')) return wake($, msToNextDay(now))
-  wake($, Math.max(50, Math.min(...waiting.map(j => j.updatedAt + SETTLE_MS - now))))
+  wake($, Math.max(0, Math.min(...waiting.map(j => (j.isFinal ? 0 : j.updatedAt + SETTLE_MS - now)))))
 }
 
 function noteFallbacks(msgKey: string, scopes: string[]): boolean {
@@ -880,8 +899,9 @@ export const register: Register = on => {
     const isFinal = open && isFinalBlock(text, await read($, finalsAtom))
     let queued = false
     if ((isFinal || (hit && tx === undefined)) && e.props.onScreen !== null && !inflightKeys.has(key) && jobs.get(e.requestId)?.key !== key) {
-      jobs.set(e.requestId, { requestId: e.requestId, key, text, settings: s, updatedAt: await $.clock.now() })
-      wake($, hit ? 0 : SETTLE_MS)
+      const now = await $.clock.now()
+      jobs.set(e.requestId, { requestId: e.requestId, key, text, settings: s, updatedAt: now, queuedAt: now, isFinal })
+      wake($, hit || isFinal ? 0 : SETTLE_MS)
       queued = true
     }
     if (isTraceDirty) flushSoon($)

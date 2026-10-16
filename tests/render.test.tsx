@@ -37,6 +37,9 @@ const DICT: Record<string, string> = {
     '电\tdiàn\telectric',
     '脑\tnǎo\tbrain',
     '电脑\tdiànnǎo\tcomputer',
+    '服务器\tfúwùqì\tserver',
+    '窗口\tchuāngkǒu\twindow',
+    '表格\tbiǎogé\ttable',
     '笔记\tbǐjì\tnotes',
     '构\tgòu\tto construct',
     '建\tjiàn\tto establish',
@@ -54,7 +57,9 @@ const EXAMPLE_REPLY = JSON.stringify({ example_target: '电脑坏了。', exampl
 type FetchAnswer = { status: number; text: string } | 'throw'
 type WorldOptions = { history?: string[]; fetch?: (url: string, body: string) => FetchAnswer }
 
-function world(on: On, reply: string | null, store: Record<string, unknown> = {}, opts: WorldOptions = {}) {
+type Reply = string | null | ((prompt: string) => string | null | Promise<string | null>)
+
+function world(on: On, reply: Reply, store: Record<string, unknown> = {}, opts: WorldOptions = {}) {
   const clock = mock.clock(on, { now: 1_760_000_000_000 })
   mock.store(on, store)
   const calls = { model: 0, example: 0, opened: [] as string[], fetched: [] as { url: string; body: string }[], status: [] as (string | undefined)[] }
@@ -102,15 +107,16 @@ function world(on: On, reply: string | null, store: Record<string, unknown> = {}
     calls.opened.push(e.id)
     return { value: { isPlaced: true as const } }
   })
-  on('model.complete', ($, e) => {
+  on('model.complete', async ($, e) => {
     if (e.prompt.includes('EXAMPLE REQUEST')) {
       calls.example++
       return { value: { isAnswered: true as const, text: EXAMPLE_REPLY, usage: USAGE } }
     }
     calls.model++
-    return reply === null
+    const text = typeof reply === 'function' ? await reply(e.prompt) : reply
+    return text === null
       ? { value: { isAnswered: false as const, reason: 'empty-reply' as const, usage: USAGE } }
-      : { value: { isAnswered: true as const, text: reply, usage: USAGE } }
+      : { value: { isAnswered: true as const, text, usage: USAGE } }
   })
   on('ui.render', { component: 'AssistantMessage' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
@@ -341,7 +347,10 @@ async function paneText(ui: { drawn: () => Promise<unknown> }) {
   const texts: string[] = []
   const visit = (n: unknown) => {
     if (typeof n === 'string') texts.push(n)
-    else if (n && typeof n === 'object') for (const c of (n as Node).children ?? []) visit(c)
+    else if (n && typeof n === 'object') {
+      if ((n as Node).type === 'Markdown') texts.push(String((n as Node).props?.text ?? ''))
+      for (const c of (n as Node).children ?? []) visit(c)
+    }
   }
   visit(await ui.drawn())
   return texts.join('')
@@ -646,4 +655,50 @@ test('the clipboard watcher runs while a translated message is on screen and sto
   await msg.redraw(props)
   await settleAll(clock)
   expect(clip.reads).toBeGreaterThan(before)
+})
+
+const PARAS = ['server', 'window', 'table'].map(
+  n => `The ${n} needs a check. It was slow today. We looked at the logs. The fix is small. It ships soon.`,
+)
+const CHUNKED = PARAS.join('\n\n')
+const CHUNK_REPLY: Record<string, string> = { server: '服务器', window: '窗口', table: '表格' }
+const answerFor = (prompt: string) => Object.entries(CHUNK_REPLY).find(([en]) => prompt.includes(`The ${en} needs`))
+
+test('a long block is split into chunks; each chunk maps back to the right place; final blocks skip the wait', async ($, on) => {
+  const { clock, calls } = world(on, prompt => {
+    const hit = answerFor(prompt)
+    return hit ? `word|${hit[0]}|1|${hit[1]}|noun|${hit[0]}` : null
+  }, {}, { history: [CHUNKED] })
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  const msg = await $.ui.mount({ plugin: 'osmosis', surface: 'terminal', component: 'AssistantMessage', props: { text: CHUNKED, isFirstOfReply: true } })
+  await clock.advance(50)
+  await clock.settle()
+  expect(calls.model).toBe(3)
+  const text = await paneText(msg)
+  for (const zh of ['The 服务器 needs', 'The 窗口 needs', 'The 表格 needs']) expect(text).toContain(zh)
+})
+
+test('words show as each chunk lands, and a failed chunk leaves only its part in English', async ($, on) => {
+  let release: () => void = () => undefined
+  const slow = new Promise<void>(done => (release = done))
+  const { clock } = world(on, async prompt => {
+    const hit = answerFor(prompt)
+    if (!hit || hit[0] === 'window') return null
+    if (hit[0] === 'table') await slow
+    return `word|${hit[0]}|1|${hit[1]}|noun|${hit[0]}`
+  }, {}, { history: [CHUNKED] })
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  const msg = await $.ui.mount({ plugin: 'osmosis', surface: 'terminal', component: 'AssistantMessage', props: { text: CHUNKED, isFirstOfReply: true } })
+  await clock.advance(50)
+  await clock.settle()
+  const early = await paneText(msg)
+  expect(early).toContain('The 服务器 needs')
+  expect(early).toContain('The window needs')
+  expect(early).toContain('The table needs')
+  release()
+  await clock.advance(50)
+  await clock.settle()
+  const late = await paneText(msg)
+  expect(late).toContain('The 表格 needs')
+  expect(late).toContain('The window needs')
 })

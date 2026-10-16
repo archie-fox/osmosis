@@ -375,6 +375,22 @@ export function parseReply(reply: string, text: string, opts: ParseOptions): Par
   return { ok: true, words: kept.sort((x, y) => x.start - y.start) }
 }
 
+// Joins chunk results in block offsets: one item per English word, at most `phrases` phrases and one known word.
+export function mergeChunks(text: string, lists: readonly OsmosisWord[][], cap: number, phrases: number, known: ReadonlySet<string>): OsmosisWord[] {
+  const ranges = eligibleRanges(text)
+  const seen = new Set<string>()
+  let p = 0
+  let k = 0
+  const all = lists.flat().filter(w => {
+    const en = w.en.toLowerCase()
+    if (seen.has(en) || !isSwappable(text, w.start, w.end, ranges)) return false
+    if (w.kind === 'phrase' && ++p > phrases) return false
+    if (known.has(w.target) && ++k > 1) return false
+    return seen.add(en)
+  })
+  return spreadOut(all, text, cap).slice(0, cap).sort((x, y) => x.start - y.start)
+}
+
 // When picks bunch up at the start (none in the last third), keep at most ceil(cap/paragraphs)+1 per paragraph.
 export function spreadOut(words: OsmosisWord[], text: string, cap: number): OsmosisWord[] {
   const paras = splitBlocks(text).filter(b => b.isProse)
@@ -396,7 +412,7 @@ export const RULES = `You pick English words in one block of an AI reply (markdo
 4. Never pick adverbs of time, frequency or degree, conjunctions, prepositions, pronouns, articles, particles or question words, except one linking word that opens a sentence or clause where Chinese also puts it first (because 因为, but 但是, so 所以, however 不过, basically 基本上, first 首先, then 然后, finally 最后, now 现在, also 另外).
 5. The target has the same part of speech and sense as the English in this sentence.
 6. A phrase replaces 2-5 words inside one clause with one natural phrase in target-language word order that drops cleanly into the sentence. Stay within the phrase limit; a phrase counts toward the item limit.
-7. Fewer good items beat weak ones; never exceed the item limit. Spread items evenly across paragraphs in text order. Prefer review words.
+7. Pick obvious items fast; do not deliberate. Never exceed the item limit. Spread items evenly across paragraphs. Prefer review words.
 8. Coverage maximum lifts rules 3-5: any part of speech, and awkward English word order is acceptable.
 Output one item per line, fields separated by |, nothing else:
 kind|en|occurrence|target|pos|gloss
@@ -414,12 +430,40 @@ const LEVEL_RULES: Record<OsmosisLevel, string> = {
 
 const PER_SENTENCE: Record<OsmosisDensity, number> = { low: 1 / 3, normal: 1, high: 2 }
 
+export type Chunk = { start: number; end: number; sentences: number }
+
+const sentencesIn = (body: string) => Math.max(body.match(/[.!?](\s|$)/g)?.length ?? 0, body.split('\n').filter(l => l.trim() !== '').length)
+
+// Groups prose paragraphs into chunks of about `size` sentences; splits only a paragraph over `max`.
+export function chunkBlock(text: string, size = 7, max = 10): Chunk[] {
+  const parts: Chunk[] = []
+  for (const b of splitBlocks(text).filter(x => x.isProse)) {
+    const n = sentencesIn(text.slice(b.start, b.end))
+    if (n <= max) {
+      parts.push({ start: b.start, end: b.end, sentences: n })
+      continue
+    }
+    const ends = [...text.slice(b.start, b.end).matchAll(/[.!?](\s+|$)/g)].map(m => b.start + m.index! + m[0].length)
+    for (let i = 0, from = b.start; i < ends.length; i += size) {
+      const to = i + size >= ends.length ? b.end : ends[i + size - 1]!
+      parts.push({ start: from, end: to, sentences: Math.min(size, ends.length - i) })
+      from = to
+    }
+  }
+  const out: Chunk[] = []
+  for (const p of parts) {
+    const last = out[out.length - 1]
+    if (last && last.sentences + p.sentences <= size + 1) out[out.length - 1] = { start: last.start, end: p.end, sentences: last.sentences + p.sentences }
+    else out.push(p)
+  }
+  return out
+}
+
 export function countSentences(text: string): number {
   let n = 0
   for (const block of splitBlocks(text)) {
     if (!block.isProse) continue
-    const body = text.slice(block.start, block.end)
-    n += Math.max(body.match(/[.!?](\s|$)/g)?.length ?? 0, body.split('\n').filter(l => l.trim() !== '').length)
+    n += sentencesIn(text.slice(block.start, block.end))
   }
   return n
 }

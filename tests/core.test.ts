@@ -468,3 +468,17 @@ describe('the item cap scales with length', () => {
     expect(swapCap(block(6), 'low')).toBe(2)
   })
 })
+
+import { chunkBlock } from '../hooks/core'
+
+describe('chunking a long block', () => {
+  test('paragraphs group into chunks of about 7 sentences; a long paragraph splits at sentence ends', () => {
+    const para = (n: number, tag: string) => Array.from({ length: n }, (_, i) => `${tag} sentence ${i + 1} ends here.`).join(' ')
+    const text = [para(3, 'A'), para(4, 'B'), para(5, 'C'), para(14, 'D')].join('\n\n')
+    const chunks = chunkBlock(text)
+    expect(chunks.map(c => c.sentences)).toEqual([7, 5, 7, 7])
+    expect(text.slice(chunks[0]!.start, chunks[0]!.end).startsWith('A sentence 1')).toBe(true)
+    expect(text.slice(chunks[1]!.start, chunks[1]!.end)).toBe(para(5, 'C'))
+    expect(text.slice(chunks[3]!.start, chunks[3]!.end).trim().endsWith('D sentence 14 ends here.')).toBe(true)
+  })
+})
