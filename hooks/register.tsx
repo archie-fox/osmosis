@@ -530,7 +530,7 @@ async function translate($: $T, job: Job) {
   inflightKeys.add(job.key)
   try {
     const s = job.settings
-    const chunks = chunkBlock(job.text)
+    const chunks = chunkBlock(job.text, 4, 6)
     const caps = chunks.map(c => swapCap(job.text.slice(c.start, c.end), s.density))
     const total = Math.min(MAX_SWAPS, caps.reduce((a, b) => a + b, 0))
     if (total === 0) return await settle($, job, [], true)
@@ -562,7 +562,7 @@ async function translate($: $T, job: Job) {
     const worker = async () => {
       while (next < chunks.length) await run(next++).catch(() => undefined)
     }
-    await Promise.all(Array.from({ length: Math.min(4, chunks.length) }, worker))
+    await Promise.all(Array.from({ length: Math.min(8, chunks.length) }, worker))
     if (landed === 0) return await retryOrFail($, job, 'no-chunk-answered')
     await settle($, job, mergeChunks(job.text, lists, total, opts.maxPhrases, opts.known), true)
     note(`block key=${job.key} chunks=${chunks.length} landed=${landed} wall=${(await $.clock.now()) - job.queuedAt}ms`)
