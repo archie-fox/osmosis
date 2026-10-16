@@ -71,6 +71,8 @@ const MAX_SEEN = 3000
 const MAX_FINALS = 200
 const EXAMPLE_ITEMS = 500
 const LOCAL_TIMEOUT_MS = 90_000
+// Haiku 4.5 runs without thinking unless asked; the `haiku` alias thinks by default.
+const HAIKU = 'claude-haiku-4-5'
 const EXAMPLE_SYSTEM = 'You write short example sentences for a language learner. Reply with strict JSON only.'
 
 const settingsAtom = atom({ plugin: 'osmosis', key: 'settings' } as const, DEFAULT_SETTINGS)
@@ -83,6 +85,7 @@ const progressAtom = atom({ plugin: 'osmosis', key: 'progress' } as const, EMPTY
 const finalsAtom = atom({ plugin: 'osmosis', key: 'finals' } as const, [])
 const usageAtom = atom({ plugin: 'osmosis', key: 'usage' } as const, EMPTY_USAGE)
 const fallbacksAtom = atom({ plugin: 'osmosis', key: 'fallbacks' } as const, [])
+const helpAtom = atom({ plugin: 'osmosis', key: 'help' } as const, null)
 const healthAtom = atom({ plugin: 'osmosis', key: 'health' } as const, { local: 'unknown' as const })
 const TX = { plugin: 'osmosis', key: 'tx' } as const
 const EX = { plugin: 'osmosis', key: 'ex' } as const
@@ -418,19 +421,20 @@ async function callLocal($: $T, s: OsmosisSettings, system: string, prompt: stri
   await setHealth($, 'ok')
   const reply = parseLocalReply(res.text)
   if (!reply) return { ok: false, reason: 'local-bad-reply' }
+  note(`call model=local:${s.localModel || 'default'} maxTokens=${maxTokens} in=${reply.usage.input} out=${reply.usage.output}`)
   await recordUsage($, 'local', reply.usage)
   return { ok: true, text: reply.text }
 }
 
 async function callHaiku($: $T, prompt: string, isWords: boolean, maxTokens: number): Promise<CallResult> {
   const r = await $.model.complete({
-    model: 'haiku',
+    model: HAIKU,
     prompt: isWords ? [{ text: RULES, cache: true }, { text: prompt }] : prompt,
     ...(isWords ? {} : { system: EXAMPLE_SYSTEM }),
     maxTokens,
-    effort: 'low',
     timeoutMs: 60000,
   })
+  note(`call model=${HAIKU} effort=none maxTokens=${maxTokens} in=${r.usage.input_tokens} out=${r.usage.output_tokens}`)
   await recordUsage($, 'haiku', fromModelUsage(r.usage))
   return r.isAnswered ? { ok: true, text: r.text } : { ok: false, reason: r.reason }
 }
@@ -753,6 +757,7 @@ function actions($: $T, key: string | null, words: readonly OsmosisWord[], examp
     retake: () => void startQuiz($),
     setSettings: patch => void changeSettings($, patch),
     openView: view => void (view === 'quiz' ? startQuiz($) : update($, viewAtom, () => 'bank' as const)),
+    toggleHelp: row => void update($, helpAtom, open => (open === row ? null : row)),
   }
 }
 
@@ -934,11 +939,8 @@ export const register: Register = on => {
     const w = index === null ? undefined : words[index]
     const example: ExampleView | null = w ? await exampleFor($, w, isCapReached(usage, today, s)) : null
     const exampleText = example?.status === 'ok' ? example.target : ''
-    const copyNote =
-      clipTool === null
-        ? 'Copy as English is unavailable: no clipboard tool found (pbpaste, wl-paste or xclip).'
-        : 'Copied text pastes as English: Osmosis watches the clipboard only to revert its own swaps.'
-    return drawHome(els, s, words, index, progress, actions($, key, words, exampleText), example, usage, today, copyNote)
+    const copyNote = clipTool === null ? 'Unavailable: no pbpaste, wl-paste or xclip found.' : ''
+    return drawHome(els, s, words, index, progress, actions($, key, words, exampleText), example, usage, today, copyNote, await read($, helpAtom))
   })
 
   on('command.run', { command: 'osmosis' }, async ($, e) => {

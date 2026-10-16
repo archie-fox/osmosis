@@ -56,7 +56,7 @@ Type `/osmosis` to open the pane. Its Settings section has a button for each cho
 - **Hover card** (At the word, In the bar, Both): Where the word card appears when you point at a word. With At the word, a word with no room next to it shows its card in the bar instead.
 - **Hover bar** (On, Off): The line above the prompt with today's count and bar cards. Press `v` to switch.
 - **Status line** (On, Off): The `🌱 中文 · <level>` entry under the prompt.
-- **Copy** (English, As shown): English: copied text pastes in English. As shown: pastes as seen.
+- **Copy** (English, As shown): English pastes copied text in English; As shown does not.
 - **Daily cap** (Off, 100k, 300k, 1M): Stop translating after this many Haiku tokens a day. The default is 300k. At the cap, replies stay in English and the bar says "daily cap reached". Local model tokens do not count.
 - **Model** (Haiku, Local): Haiku (default) or a local model on your machine. See "Run it on a local model".
 - **Word bank** (`w`) and **Quiz** (`q`) open those views.
@@ -95,7 +95,7 @@ The status line shows `🌱 中文 · <level>` while Osmosis is on, unless you t
 
 ## Good to know
 
-- Each finished reply costs one small Haiku call. Opening a word for its example costs one more small call, once per word. Osmosis remembers old translations and examples, so they show again at once.
+- Each finished reply costs one small call to Claude Haiku 4.5, which answers without extended thinking. Opening a word for its example costs one more small call, once per word. Osmosis remembers old translations and examples, so they show again at once.
 - If a translation fails, the reply shows in plain English.
 - On macOS and Linux, text you copy from a translated reply pastes as English. Osmosis watches the clipboard (with `pbpaste`, `wl-paste` or `xclip`) only to revert its own swaps, and only while a translated reply is on screen; it changes nothing else and keeps no copy of what you copied. A copy that spans two replies stays as shown.
 - A typed command prints one short line, for example "Osmosis level: beginner." Claude sees that line, as it sees any command output. The pane buttons print nothing.

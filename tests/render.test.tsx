@@ -592,8 +592,22 @@ test('/osmosis help lists every setting with its values and effect; the pane sho
   expect(c.text).toBe('Osmosis coverage: Maximum. Natural keeps English grammar intact; Maximum swaps more words.')
   const pane = await $.ui.mount(PANE_PROPS)
   expect((await pane.find({ key: 'coverage-maximum' }))?.props.variant).toBe('primary')
-  const text = await paneText(pane)
-  for (const help of ['Turn all translation on or off.', 'Which words swap: HSK 1-2, 3-4, or 5-6.', 'Haiku (default) or a local model on your machine.']) expect(text).toContain(help)
+})
+
+test('setting descriptions stay hidden until a label is pressed; one shows at a time', async ($, on) => {
+  world(on, REPLY)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  const pane = await $.ui.mount(PANE_PROPS)
+  const level = 'Which words swap: HSK 1-2, 3-4, or 5-6.'
+  const density = 'How many words swap: 1 per 3 sentences, 1, or 2 per sentence.'
+  expect(await paneText(pane)).not.toContain(level)
+  await pane.press({ key: 'help-level' })
+  expect(await paneText(pane)).toContain(level)
+  await pane.press({ key: 'help-density' })
+  expect(await paneText(pane)).toContain(density)
+  expect(await paneText(pane)).not.toContain(level)
+  await pane.press({ key: 'help-density' })
+  expect(await paneText(pane)).not.toContain(density)
 })
 
 const PHRASE_TEXT = 'If it breaks, run the test again and check the logs for the error.\n\nThat is all for this change; the rest of the project stays the same until the next release goes out next week, as planned with the team.'

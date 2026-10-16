@@ -459,3 +459,12 @@ describe('spreading picks across paragraphs', () => {
     expect(r.ok && r.words.length).toBe(7)
   })
 })
+
+describe('the item cap scales with length', () => {
+  test('a 40-sentence block at normal caps at 30; a 6-sentence block at 6', () => {
+    const block = (n: number) => Array.from({ length: n }, (_, i) => `Sentence number ${i + 1} is here.`).join(' ')
+    expect(swapCap(block(40), 'normal')).toBe(30)
+    expect(swapCap(block(6), 'normal')).toBe(6)
+    expect(swapCap(block(6), 'low')).toBe(2)
+  })
+})

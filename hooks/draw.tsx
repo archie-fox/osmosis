@@ -210,6 +210,7 @@ export type PaneActions = {
   retake: () => void
   setSettings: (patch: Partial<OsmosisSettings>) => void
   openView: (view: 'bank' | 'quiz') => void
+  toggleHelp: (row: string) => void
 }
 
 function choiceRow<V extends string>(
@@ -219,26 +220,34 @@ function choiceRow<V extends string>(
   options: readonly (readonly [V, string])[],
   current: V,
   choose: (v: V) => void,
-  hotkeyFor?: (v: V) => string | undefined,
+  hotkeyFor: (v: V) => string | undefined,
+  isOpen: boolean,
+  toggleHelp: () => void,
 ) {
   return (
-    <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
-      <Box minWidth={12} flexShrink={0}>
-        <Text dimColor>{title}</Text>
+    <Box flexDirection="row">
+      <Box width={13} flexShrink={0}>
+        <Button key={`help-${name}`} plain dimColor={!isOpen} onPress={toggleHelp}>
+          <Text dimColor>{isOpen ? '\u25be ' : '\u25b8 '}</Text>
+          {title}
+        </Button>
       </Box>
-      {options.map(([value, label]) => {
-        const hotkey = hotkeyFor?.(value)
-        return hotkey === undefined ? (
-          <Button key={`${name}-${value}`} label={label} variant={value === current ? 'primary' : 'secondary'} onPress={() => choose(value)} />
-        ) : (
-          <Button key={`${name}-${value}`} label={label} hotkey={hotkey} variant={value === current ? 'primary' : 'secondary'} onPress={() => choose(value)} />
-        )
-      })}
+      <Box flexDirection="row" flexWrap="wrap" columnGap={1} flexGrow={1} flexShrink={1}>
+        {options.map(([value, label]) => {
+          const hotkey = hotkeyFor(value)
+          const variant = value === current ? 'primary' : 'secondary'
+          return hotkey === undefined ? (
+            <Button key={`${name}-${value}`} label={label} variant={variant} onPress={() => choose(value)} />
+          ) : (
+            <Button key={`${name}-${value}`} label={label} hotkey={hotkey} variant={variant} onPress={() => choose(value)} />
+          )
+        })}
+      </Box>
     </Box>
   )
 }
 
-export function drawSettings(els: Els, s: OsmosisSettings, act: PaneActions, copyNote = '') {
+export function drawSettings(els: Els, s: OsmosisSettings, act: PaneActions, copyNote = '', help: string | null = null) {
   const { Box, Text, Button } = els
   return (
     <Box flexDirection="column">
@@ -255,9 +264,11 @@ export function drawSettings(els: Els, s: OsmosisSettings, act: PaneActions, cop
               row.values.map(v => [v[0], v[1]] as const),
               current,
               v => act.setSettings({ [row.key]: row.values.find(x => x[0] === v)?.[2] } as Partial<OsmosisSettings>),
-              toggle ? v => (v === current ? undefined : toggle) : undefined,
+              v => (toggle && v !== current ? toggle : undefined),
+              help === row.keyName,
+              () => act.toggleHelp(row.keyName),
             )}
-            <Text dimColor>{`  ${row.help}`}</Text>
+            {help === row.keyName ? <Text dimColor>{`  ${row.help}`}</Text> : null}
             {row.key === 'copy' && s.copy === 'english' && copyNote ? <Text dimColor>{`  ${copyNote}`}</Text> : null}
             {row.key === 'model' && s.model === 'local' ? (
               <Text dimColor>{`  Local endpoint: ${s.endpoint}${s.localModel ? ` (${s.localModel})` : ''} \u00b7 change with /osmosis endpoint <url>`}</Text>
@@ -285,6 +296,7 @@ export function drawHome(
   usage: OsmosisUsage = { days: {} },
   today = '',
   copyNote = '',
+  help: string | null = null,
 ): RenderElement {
   const { Box, Text, Button } = els
   const w = selected === null ? undefined : words[selected]
@@ -358,7 +370,7 @@ export function drawHome(
           </Button>
         ))}
       </Box>
-      {drawSettings(els, s, act, copyNote)}
+      {drawSettings(els, s, act, copyNote, help)}
       {today ? (
         <Box flexDirection="column">
           {usageLines(usage, today).map(line => (
