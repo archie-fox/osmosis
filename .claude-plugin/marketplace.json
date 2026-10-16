@@ -1,0 +1,6 @@
+{
+  "name": "osmosis",
+  "description": "Osmosis: learn Mandarin while you read Claude's replies.",
+  "owner": { "name": "raylrcheng" },
+  "plugins": [{ "name": "osmosis", "source": "./" }]
+}
