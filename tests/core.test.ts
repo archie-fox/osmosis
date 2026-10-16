@@ -434,3 +434,28 @@ describe('compact reply format', () => {
     expect(parseReply('I could not find any good words to pick in this block.', text, OPTS).ok).toBe(false)
   })
 })
+
+describe('spreading picks across paragraphs', () => {
+  const nouns = [
+    ['server', 'client', 'cache', 'queue', 'log'],
+    ['window', 'button', 'screen', 'menu', 'panel'],
+    ['table', 'column', 'index', 'record', 'field'],
+    ['branch', 'commit', 'merge', 'tag', 'remote'],
+    ['token', 'model', 'prompt', 'reply', 'limit'],
+  ]
+  const paras = nouns.map(n => `This part covers the ${n[0]}, the ${n[1]}, the ${n[2]}, the ${n[3]} and the ${n[4]} for this week.`)
+  const text = paras.join('\n\n')
+  const line = (en: string) => `word|${en}|1|词|noun|${en}`
+  const inPara = (r: ReturnType<typeof parseReply>, i: number) =>
+    r.ok ? r.words.filter(w => w.start >= text.indexOf(paras[i]!) && w.end <= text.indexOf(paras[i]!) + paras[i]!.length).length : -1
+
+  test('picks bunched in the first paragraphs are thinned to a fair share each', () => {
+    const r = parseReply([...nouns[0]!, ...nouns[1]!].map(line).join('\n'), text, { ...OPTS, cap: 12 })
+    expect([inPara(r, 0), inPara(r, 1)]).toEqual([4, 4])
+  })
+
+  test('picks that already reach the last paragraph are left alone', () => {
+    const r = parseReply([...nouns[0]!, ...nouns[4]!.slice(0, 2)].map(line).join('\n'), text, { ...OPTS, cap: 12 })
+    expect(r.ok && r.words.length).toBe(7)
+  })
+})

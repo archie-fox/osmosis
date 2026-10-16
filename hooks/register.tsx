@@ -525,7 +525,7 @@ async function translate($: $T, job: Job) {
     const r =
       job.settings.model === 'local'
         ? await callLocal($, job.settings, RULES + LOCAL_NOTE, prompt, wordsSchema(cap), 200 + cap * 80)
-        : await callHaiku($, prompt, true, 100 + cap * 40)
+        : await callHaiku($, prompt, true, 60 + cap * 30)
     if (!r.ok) return await retryOrFail($, job, r.reason)
     const isMandarin = langInfo(job.settings.lang).isMandarin
     const parsed = parseReply(r.text, job.text, {

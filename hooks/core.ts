@@ -348,7 +348,7 @@ export function parseReply(reply: string, text: string, opts: ParseOptions): Par
   let knownUsed = 0
   let phrases = 0
   for (const o of data) {
-    if (words.length >= Math.min(opts.cap, MAX_SWAPS)) break
+    if (words.length >= MAX_SWAPS * 2) break
     const en = typeof o.en === 'string' ? o.en : ''
     const occurrence = Math.trunc(Number(o.occurrence ?? 1))
     const target = str(o.target, 24)
@@ -371,8 +371,20 @@ export function parseReply(reply: string, text: string, opts: ParseOptions): Par
     seenEn.add(en.toLowerCase())
     if (isKnown) knownUsed++
   }
-  words.sort((x, y) => x.start - y.start)
-  return { ok: true, words }
+  const kept = spreadOut(words, text, Math.min(opts.cap, MAX_SWAPS)).slice(0, Math.min(opts.cap, MAX_SWAPS))
+  return { ok: true, words: kept.sort((x, y) => x.start - y.start) }
+}
+
+// When picks bunch up at the start (none in the last third), keep at most ceil(cap/paragraphs)+1 per paragraph.
+export function spreadOut(words: OsmosisWord[], text: string, cap: number): OsmosisWord[] {
+  const paras = splitBlocks(text).filter(b => b.isProse)
+  if (paras.length < 2 || words.length === 0) return words
+  const from = paras[0]!.start
+  const third = (paras[paras.length - 1]!.end - from) / 3
+  const firstThird = words.filter(w => w.start < from + third).length
+  if (words.some(w => w.start >= from + 2 * third) || firstThird <= words.length / 2) return words
+  const per = paras.map(() => 0)
+  return words.filter(w => ++per[paras.findIndex(b => w.start >= b.start && w.end <= b.end)]! <= Math.ceil(cap / paras.length) + 1)
 }
 
 // ---------- the prompt ----------
@@ -384,7 +396,7 @@ export const RULES = `You pick English words in one block of an AI reply (markdo
 4. Never pick adverbs of time, frequency or degree, conjunctions, prepositions, pronouns, articles, particles or question words, except one linking word that opens a sentence or clause where Chinese also puts it first (because 因为, but 但是, so 所以, however 不过, basically 基本上, first 首先, then 然后, finally 最后, now 现在, also 另外).
 5. The target has the same part of speech and sense as the English in this sentence.
 6. A phrase replaces 2-5 words inside one clause with one natural phrase in target-language word order that drops cleanly into the sentence. Stay within the phrase limit; a phrase counts toward the item limit.
-7. Fewer good items beat weak ones. Never exceed the item limit; follow the level and density. Prefer review words when they occur naturally.
+7. Fewer good items beat weak ones; never exceed the item limit. Spread items evenly across paragraphs in text order. Prefer review words.
 8. Coverage maximum lifts rules 3-5: any part of speech, and awkward English word order is acceptable.
 Output one item per line, fields separated by |, nothing else:
 kind|en|occurrence|target|pos|gloss
