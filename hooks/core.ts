@@ -16,6 +16,7 @@ export const DEFAULT_SETTINGS: OsmosisSettings = {
   show: 'hanzi',
   isBandOn: true,
   isStatusOn: true,
+  copy: 'english',
   card: 'word',
   cap: '300k',
   model: 'haiku',
@@ -87,9 +88,31 @@ function isProseLine(t: string): boolean {
   return true
 }
 
+const DRAFT = /\b(drafts?|messages?|e-?mails?|slack|tweets?|posts?|repl(y|ies)|commits?|PRs?|descriptions?|paste|copy)\b/i
+
+function labelOf(line: string): string | null {
+  const t = line.trim()
+  if (/^#{1,6}\s/.test(t)) return t
+  if (/^(\*\*[^*]+\*\*|__[^_]+__):?$/.test(t)) return t
+  if (t.length <= 160 && /:$/.test(t)) return t
+  return null
+}
+
 export function splitBlocks(text: string): Block[] {
   const lines = linesOf(text)
   const blocks: Block[] = []
+  let inDraft = false
+  const push = (block: Block, own: readonly Line[], isFence: boolean) => {
+    let touched = isFence && inDraft
+    if (!isFence) {
+      for (const l of own) {
+        const label = labelOf(l.text)
+        if (label !== null) inDraft = DRAFT.test(label)
+        if (inDraft) touched = true
+      }
+    }
+    blocks.push(touched ? { ...block, isProse: false } : block)
+  }
   let i = 0
   while (i < lines.length) {
     const line = lines[i]!
@@ -104,14 +127,14 @@ export function splitBlocks(text: string): Block[] {
       let j = i + 1
       while (j < lines.length && !close.test(lines[j]!.text)) j++
       const last = Math.min(j, lines.length - 1)
-      blocks.push({ start: line.start, end: lines[last]!.end, isProse: false })
+      push({ start: line.start, end: lines[last]!.end, isProse: false }, [], true)
       i = last + 1
       continue
     }
     let j = i
     while (j + 1 < lines.length && lines[j + 1]!.text.trim() !== '' && !FENCE.test(lines[j + 1]!.text)) j++
     const own = lines.slice(i, j + 1)
-    blocks.push({ start: line.start, end: lines[j]!.end, isProse: own.every(l => isProseLine(l.text)) })
+    push({ start: line.start, end: lines[j]!.end, isProse: own.every(l => isProseLine(l.text)) }, own, false)
     i = j + 1
   }
   return blocks
@@ -233,12 +256,22 @@ function str(v: unknown, max = 200): string {
 }
 
 export const STOPWORDS = new Set(
-  'because but and or now again then already very also just still here there this that it the a an to of in on at for with'.split(' '),
+  'because but and or now again then already very also just still here there this that it the a an to of in on at for with so however basically first finally'.split(
+    ' ',
+  ),
 )
 
-export function isWeakSwap(en: string, pos: string): boolean {
+export const LINKING = new Set('because but so however basically first then finally now also'.split(' '))
+
+export function isClauseStart(text: string, start: number): boolean {
+  const before = text.slice(Math.max(0, text.lastIndexOf('\n', start - 1) + 1), start)
+  if (/^\s*(([-*+]|\d{1,3}[.)])\s+)?$/.test(before)) return true
+  return /[.!?:;]\s+$/.test(before)
+}
+
+export function isWeakSwap(en: string, pos: string, atClauseStart = false): boolean {
   const lower = en.toLowerCase()
-  if (STOPWORDS.has(lower)) return true
+  if (STOPWORDS.has(lower)) return !(atClauseStart && LINKING.has(lower))
   const last = lower.split(' ').pop() ?? lower
   return /\bverb\b/i.test(pos) && isInflected(last)
 }
@@ -301,11 +334,11 @@ export function parseReply(reply: string, text: string, opts: ParseOptions): Par
     if (!en || !target || !Number.isFinite(occurrence) || occurrence < 1) continue
     if (opts.isMandarin ? !CJK.test(target) : target.toLowerCase() === en.toLowerCase()) continue
     if (seenEn.has(en.toLowerCase())) continue
-    if (isWeakSwap(en, str(o.pos, 30))) continue
     const isKnown = opts.known.has(target)
     if (isKnown && knownUsed >= 1) continue
     const start = locate(text, en, occurrence, ranges)
     if (start === null) continue
+    if (isWeakSwap(en, str(o.pos, 30), isClauseStart(text, start))) continue
     const end = start + en.length
     if (taken.some(r => start < r.end && r.start < end)) continue
     const lvl = Number(o.level ?? o.hsk)
@@ -337,13 +370,14 @@ export function parseReply(reply: string, text: string, opts: ParseOptions): Par
 export const RULES = `You pick words for Osmosis, a language-learning layer. You read one block of an AI assistant's reply (markdown) and choose English words or short phrases to show in a target language, so a learner picks up vocabulary while reading.
 
 Rules:
-1. Pick ONLY from plain prose sentences. Never pick text inside inline code (\`like this\`), code fences, URLs, file paths, command names, identifiers (camelCase, snake_case, names with dots, slashes or digits), numbers, version strings, table rows, headings, block quotes, link text, or bold text.
+1. Pick ONLY from plain prose sentences. Never pick words from text meant to be copied: drafts, messages, emails, commit or PR text. Never pick text inside inline code (\`like this\`), code fences, URLs, file paths, command names, identifiers (camelCase, snake_case, names with dots, slashes or digits), numbers, version strings, table rows, headings, block quotes, link text, or bold text.
 2. "en" is copied exactly, character for character and with the same case, from the block. It is a whole word or a whole phrase, never part of a word, with no punctuation around it.
 3. "occurrence" says which appearance of that exact "en" string you mean, counting from 1 at the start of the block.
 4. The learner reads the English sentence with your item dropped in its place, so pick items that still read naturally there:
    - Prefer nouns and noun phrases ("the test", "the function"), then adjectives directly before a noun ("an empty array").
    - Pick a verb only where the English verb is in its base form: an imperative ("Run the test"), after "to", or after a modal such as can, should or will. Never replace an inflected verb ("expects", "failed", "running").
    - Never pick adverbs of time, frequency or degree (now, again, already, very), conjunctions (because, but, and), prepositions, pronouns, articles, particles or question words.
+   - One exception: a single linking word that opens a sentence or clause, where Chinese puts it first too: because 因为, but 但是, so 所以, however 不过, basically 基本上, first 首先, then 然后, finally 最后, now 现在, also 另外. Example: "因为 the input is empty, the test fails". Inside a clause ("fails because the function", "run it again") these stay banned.
 5. The target item has the same part of speech and the same sense as the English word in this sentence: a noun for a noun, a verb for a verb (预期 is a noun or adjective, never the verb "expects").
 6. Fewer good items beat more weak ones. If fewer words qualify than the item limit, return fewer; never fill the limit with function words.
 7. Follow the level and the density given, and never go over the item limit.
@@ -659,6 +693,10 @@ export function isFinalBlock(text: string, finals: readonly string[]): boolean {
 export type HistoryRow = { role: 'user' | 'assistant'; text: string; toolUses: readonly unknown[]; toolResults?: readonly unknown[] }
 
 export function finalsFromHistory(rows: readonly HistoryRow[]): string[] {
+  return rawFinalsFromHistory(rows).map(normText)
+}
+
+export function rawFinalsFromHistory(rows: readonly HistoryRow[]): string[] {
   const out: string[] = []
   let last = ''
   for (const row of rows) {
@@ -666,10 +704,10 @@ export function finalsFromHistory(rows: readonly HistoryRow[]): string[] {
       if (row.toolUses.length > 0) last = ''
       else if (row.text.trim()) last = row.text
     } else if (!row.toolResults || row.toolResults.length === 0) {
-      if (last) out.push(normText(last))
+      if (last) out.push(last)
       last = ''
     }
   }
-  if (last) out.push(normText(last))
+  if (last) out.push(last)
   return out
 }

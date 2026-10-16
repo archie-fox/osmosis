@@ -67,6 +67,7 @@ function world(on: On, reply: string | null, store: Record<string, unknown> = {}
   mock.store(on, store)
   const calls = { model: 0, example: 0, opened: [] as string[], fetched: [] as { url: string; body: string }[], status: [] as (string | undefined)[] }
   const history = opts.history ?? [TEXT, LOW_TEXT]
+  const clip = { value: '', writes: [] as string[] }
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.messages', () => ({
     value: history.flatMap(text => [
@@ -75,9 +76,16 @@ function world(on: On, reply: string | null, store: Record<string, unknown> = {}
     ]),
   }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
-  on('process.run', () => ({
-    value: { exitCode: 0, stdout: 'Tingting            zh_CN    # 你好\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
-  }))
+  on('process.run', ($, e) => {
+    const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+    if (e.argv[0] === 'pbpaste') return out(clip.value)
+    if (e.argv[0] === 'pbcopy') {
+      clip.writes.push(String(e.init?.stdin ?? ''))
+      clip.value = String(e.init?.stdin ?? '')
+      return out('')
+    }
+    return out('Tingting            zh_CN    # 你好\n')
+  })
   on('ui.status', ($, e) => {
     calls.status.push(e.text)
     return { value: undefined }
@@ -117,7 +125,7 @@ function world(on: On, reply: string | null, store: Record<string, unknown> = {}
     const { Text } = $.ui.resolve(e)
     return <Text>ENGINE-BAND</Text>
   })
-  return { clock, calls }
+  return { clock, calls, clip }
 }
 
 test('the reply draws as the engine draws it while no translation exists', async ($, on) => {
@@ -521,4 +529,32 @@ test('in word mode, a word with no room for a floating card gets a bar card; oth
   expect(scopes).toContain(shortScope)
   expect(scopes).not.toContain(lowScope)
   expect(await band.find({ text: /Osmosis 中文 · beginner/ })).toBeDefined()
+})
+
+test('a copied selection of a translated block pastes as English; other clipboard text is untouched', async ($, on) => {
+  const reply = JSON.stringify([item('computer', '电脑', 'diànnǎo', 1), item('note', '笔记', 'bǐjì', 2)])
+  const { clock, clip } = world(on, reply)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.ui.mount({ plugin: 'osmosis', surface: 'terminal', ...MESSAGE })
+  await settleAll(clock)
+  clip.value = 'I opened the 电脑 and read\n  the file. Then I wrote a short 笔记'
+  await settleAll(clock)
+  expect(clip.writes).toEqual(['I opened the computer and read\n  the file. Then I wrote a short note'])
+  clip.value = '我的电脑很快'
+  await settleAll(clock)
+  clip.value = 'hello world'
+  await settleAll(clock)
+  expect(clip.writes).toHaveLength(1)
+})
+
+test('with Copy set to As shown, the clipboard is left alone', async ($, on) => {
+  const { clock, clip } = world(on, REPLY, { settings: { copy: 'shown' } })
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.ui.mount({ plugin: 'osmosis', surface: 'terminal', ...MESSAGE })
+  await settleAll(clock)
+  clip.value = 'I opened the 电脑 and read the file.'
+  await settleAll(clock)
+  expect(clip.writes).toHaveLength(0)
+  const pane = await $.ui.mount(PANE_PROPS)
+  expect((await pane.find({ key: 'copy-shown' }))?.props.variant).toBe('primary')
 })

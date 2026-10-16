@@ -54,6 +54,7 @@ Type `/osmosis` to open the pane. Its Settings section has a button for each cho
 - **Show**: Hanzi (characters), Pinyin, or Both.
 - **Hover card**: At the word (the default: the card shows above or below the word you point at), In the bar (a one-line card in the bar above the prompt), or Both. When there is no room next to a word, its card shows in the bar instead.
 - **Hover bar**: On or Off. Press `v` to switch. Off hides the bar above the prompt, and its card too.
+- **Copy**: English (the default) or As shown. With English, text you select and copy from a reply pastes with the swapped words back in English.
 - **Status line**: On or Off. Off hides the `🌱 中文 · <level>` entry under the prompt.
 - **Daily cap**: Off, 100k, 300k (the default), or 1M Haiku tokens per day. At the cap, Osmosis starts no new translations until the next day, replies stay in English, and the bar says "daily cap reached". The cap counts Haiku tokens only.
 - **Model**: Haiku (the default) or Local. See "Run it on a local model".
@@ -77,6 +78,7 @@ The same settings also work as typed commands:
 | `/osmosis card word` | Sets where the hover card shows: `word` (next to the word), `bar` (in the bar above the prompt), or `both`. |
 | `/osmosis band on` / `/osmosis band off` | Shows or hides the hover bar above the prompt. |
 | `/osmosis status on` / `/osmosis status off` | Shows or hides the Osmosis entry in the status line. |
+| `/osmosis copy english` / `/osmosis copy shown` | Sets what a copied selection pastes as: the English original, or the text as shown. |
 | `/osmosis cap 300k` | Sets the daily cap: `off`, `100k`, `300k`, or `1m` Haiku tokens. |
 | `/osmosis model haiku` | Sets the model: `haiku` or `local`. |
 | `/osmosis endpoint <url>` | Sets the local server address. The default is `http://127.0.0.1:8080/v1`. |
@@ -91,6 +93,7 @@ The status line shows `🌱 中文 · <level>` while Osmosis is on, unless you t
 
 - Each finished reply costs one small Haiku call. Opening a word for its example costs one more small call, once per word. Osmosis remembers old translations and examples, so they show again at once.
 - If a translation fails, the reply shows in plain English.
+- On macOS and Linux, text you copy from a translated reply pastes as English. Osmosis watches the clipboard (with `pbpaste`, `wl-paste` or `xclip`) only to revert its own swaps; it changes nothing else and keeps no copy of what you copied. A copy that spans two replies stays as shown.
 - A typed command prints one short line, for example "Osmosis level: beginner." Claude sees that line, as it sees any command output. The pane buttons print nothing.
 
 ## Run it on a local model

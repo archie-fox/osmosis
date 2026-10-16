@@ -17,7 +17,7 @@ import {
   RULES,
   buildPrompt,
   dayOf,
-  finalsFromHistory,
+  rawFinalsFromHistory,
   hashText,
   isFinalBlock,
   keyFor,
@@ -32,6 +32,8 @@ import {
   swapCap,
 } from './core'
 import type { HistoryRow } from './core'
+import { revertCopy } from './copyback'
+import type { ShownBlock } from './copyback'
 import { EMPTY_DICT, parseCedict, parseHsk, verifyWord } from './dict'
 import type { Dict } from './dict'
 import { drawBand, drawBank, drawHome, drawMessage, drawQuiz } from './draw'
@@ -100,6 +102,18 @@ let isTicking = false
 let dict: Dict | null = null
 let dictLoading: Promise<Dict> | null = null
 const fallbackByMsg = new Map<string, string[]>()
+const keyText = new Map<string, string>()
+type ClipTool = { read: string[]; write: string[]; name: string }
+const CLIP_TOOLS: ClipTool[] = [
+  { name: 'pbpaste', read: ['pbpaste'], write: ['pbcopy'] },
+  { name: 'wl-paste', read: ['wl-paste', '--no-newline'], write: ['wl-copy'] },
+  { name: 'xclip', read: ['xclip', '-selection', 'clipboard', '-o'], write: ['xclip', '-selection', 'clipboard'] },
+]
+let clipTool: ClipTool | null | undefined
+let lastClipHash: string | null = null
+let isClipBusy = false
+const CLIP_MS = 400
+const CLIP_BLOCKS = 30
 let isFallbackDirty = false
 
 // ---------- persistence ----------
@@ -122,8 +136,63 @@ async function loadAll($: $T) {
 async function loadFinals($: $T) {
   const rows = (await $.session.messages()) as unknown
   if (!Array.isArray(rows)) return
-  const found = finalsFromHistory(rows as HistoryRow[])
+  const found = rawFinalsFromHistory(rows as HistoryRow[]).map(normText)
   if (found.length) await update($, finalsAtom, list => [...new Set([...found, ...list])].slice(-MAX_FINALS))
+}
+
+function rememberText(key: string, text: string) {
+  if (keyText.get(key) === text) return
+  keyText.delete(key)
+  keyText.set(key, text)
+  while (keyText.size > CACHE_ITEMS) keyText.delete(keyText.keys().next().value as string)
+}
+
+function shownBlocks(): ShownBlock[] {
+  const out: ShownBlock[] = []
+  for (const [key, text] of [...keyText.entries()].reverse()) {
+    const words = cache.get(key)
+    if (words && words.length) out.push({ text, words })
+    if (out.length >= CLIP_BLOCKS) break
+  }
+  return out
+}
+
+async function findClipTool($: $T): Promise<ClipTool | null> {
+  for (const tool of CLIP_TOOLS) {
+    try {
+      const r = await $.process.run(tool.read, { timeoutMs: 3000 })
+      if (r.exitCode === 0) return tool
+    } catch {
+      // not installed here
+    }
+  }
+  return null
+}
+
+async function watchClipboard($: $T) {
+  if (isClipBusy) return
+  isClipBusy = true
+  try {
+    const s = await read($, settingsAtom)
+    if (!s.isOn || s.copy !== 'english' || keyText.size === 0) return
+    if (clipTool === undefined) clipTool = await findClipTool($)
+    if (!clipTool) return
+    const r = await $.process.run(clipTool.read, { timeoutMs: 3000 })
+    if (r.exitCode !== 0 || r.isStdoutTruncated) return
+    const hash = hashText(r.stdout)
+    if (hash === lastClipHash) return
+    const isFirst = lastClipHash === null
+    lastClipHash = hash
+    if (isFirst) return
+    const english = revertCopy(r.stdout, shownBlocks(), s.show)
+    if (english === null || english === r.stdout) return
+    const w = await $.process.run(clipTool.write, { stdin: english, timeoutMs: 3000 })
+    if (w.exitCode === 0) lastClipHash = hashText(english)
+  } catch {
+    // the clipboard stays as it was
+  } finally {
+    isClipBusy = false
+  }
 }
 
 async function flush($: $T) {
@@ -293,6 +362,7 @@ function remember(key: string, words: OsmosisWord[]) {
 
 async function settle($: $T, job: Job, words: OsmosisWord[], isFresh: boolean) {
   remember(job.key, words)
+  rememberText(job.key, job.text)
   if (isFresh) isCacheDirty = true
   if (words.length > 0) {
     await update($, recentAtom, list =>
@@ -590,7 +660,7 @@ export const register: Register = on => {
       await $.command.register({
         name: 'osmosis',
         description: 'Osmosis Chinese practice: open the word pane, or change settings',
-        argumentHint: '[on|off|level|density|show|card|band|status|cap|model|endpoint|bank|quiz|lang|help]',
+        argumentHint: '[on|off|level|density|show|card|band|status|cap|copy|model|endpoint|bank|quiz|lang|help]',
         immediate: true,
       })
     } catch {
@@ -598,9 +668,23 @@ export const register: Register = on => {
     }
     applyStatus($, await read($, settingsAtom))
     $.clock.every(TICK_MS, () => void tick($).catch(() => undefined))
+    $.clock.every(CLIP_MS, () => void watchClipboard($))
     void detectVoice($)
     return next(e)
   })
+
+  on('ui.copy', async ($, e, next) => {
+    try {
+      const s = await read($, settingsAtom)
+      if (s.isOn && s.copy === 'english') {
+        const english = revertCopy(e.text, shownBlocks(), s.show)
+        if (english !== null) return next({ ...e, text: english })
+      }
+    } catch {
+      // copy as given
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   on('session.end', async ($, e, next) => {
     try {
@@ -644,6 +728,7 @@ export const register: Register = on => {
     }
     const words = tx?.status === 'ok' ? tx.words : hit
     if (!words || words.length === 0) return next(e)
+    rememberText(key, text)
     const segs = planMessage(text, words)
     if (!segs.some(seg => seg.kind === 'prose')) return next(e)
     const { Box, Text, Button, Markdown } = $.ui.resolve(e)
@@ -693,7 +778,11 @@ export const register: Register = on => {
     const w = index === null ? undefined : words[index]
     const example: ExampleView | null = w ? await exampleFor($, w, isCapReached(usage, today, s)) : null
     const exampleText = example?.status === 'ok' ? example.target : ''
-    return drawHome(els, s, words, index, progress, actions($, key, words, exampleText), example, usage, today)
+    const copyNote =
+      clipTool === null
+        ? 'Copy as English is unavailable: no clipboard tool found (pbpaste, wl-paste or xclip).'
+        : 'Copied text pastes as English: Osmosis watches the clipboard only to revert its own swaps.'
+    return drawHome(els, s, words, index, progress, actions($, key, words, exampleText), example, usage, today, copyNote)
   })
 
   on('command.run', { command: 'osmosis' }, async ($, e) => {
@@ -701,7 +790,7 @@ export const register: Register = on => {
     const arg = (rest[0] ?? '').toLowerCase()
     const v = verb.toLowerCase()
     const usage =
-      'Osmosis: /osmosis (open pane) · on|off · level beginner|intermediate|advanced · density low|normal|high · show hanzi|pinyin|both · card word|bar|both · band on|off · status on|off · cap off|100k|300k|1m · model haiku|local · endpoint <url> · local-model <name> · bank · quiz · lang <name>'
+      'Osmosis: /osmosis (open pane) · on|off · level beginner|intermediate|advanced · density low|normal|high · show hanzi|pinyin|both · card word|bar|both · band on|off · status on|off · cap off|100k|300k|1m · copy english|shown · model haiku|local · endpoint <url> · local-model <name> · bank · quiz · lang <name>'
     try {
       if (v === '') {
         await update($, viewAtom, () => 'home' as const)
@@ -759,6 +848,10 @@ export const register: Register = on => {
         const lang = rest.join(' ').slice(0, 40)
         await changeSettings($, { lang })
         return { text: `Osmosis language: ${langInfo(lang).name}.` }
+      }
+      if (v === 'copy' && (arg === 'english' || arg === 'shown')) {
+        await changeSettings($, { copy: arg })
+        return { text: arg === 'english' ? 'Osmosis copies swapped words as English.' : 'Osmosis copies text as shown.' }
       }
       if (v === 'bank') {
         await update($, viewAtom, () => 'bank' as const)

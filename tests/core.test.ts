@@ -303,3 +303,61 @@ describe('floating card placement', () => {
     expect(placeCard(spot(0), lines, 6, undefined, 100)).toEqual({ kind: 'bar' })
   })
 })
+
+import { revertCopy } from '../hooks/copyback'
+
+describe('copy as English', () => {
+  const text = 'I opened the computer and read the file. Then I wrote a short note for you.'
+  const w = (en: string, target: string, romanization: string) => ({
+    en, occurrence: 1, target, romanization, pos: 'noun', gloss: en, literal: '',
+    exampleTarget: '', exampleRomanization: '', exampleEn: '', level: 1,
+    start: text.indexOf(en), end: text.indexOf(en) + en.length,
+  })
+  const blocks = [{ text, words: [w('computer', '电脑', 'diànnǎo'), w('note', '笔记', 'bǐjì')] }]
+
+  test('a displayed selection maps back to English, wraps and gutter kept', () => {
+    expect(revertCopy('\u23FA I opened the 电脑 and read\n  the file.', blocks, 'hanzi')).toBe('\u23FA I opened the computer and read\n  the file.')
+  })
+  test('a selection that starts or ends inside a swapped item gets the whole English word', () => {
+    expect(revertCopy('脑 and read the', blocks, 'hanzi')).toBe('computer and read the')
+    expect(revertCopy('a short 笔', blocks, 'hanzi')).toBe('a short note')
+  })
+  test('both mode with pinyin and pinyin mode map back', () => {
+    expect(revertCopy('the 电脑 diànnǎo and read', blocks, 'both')).toBe('the computer and read')
+    expect(revertCopy('opened the diànnǎo and', blocks, 'pinyin')).toBe('opened the computer and')
+  })
+  test('unrelated Chinese and non-matching text are left alone', () => {
+    expect(revertCopy('我的电脑很快', blocks, 'hanzi')).toBe(null)
+    expect(revertCopy('hello world', blocks, 'hanzi')).toBe(null)
+    expect(revertCopy('I opened the', blocks, 'hanzi')).toBe(null)
+  })
+})
+
+describe('draft sections are never translated', () => {
+  test('a Slack draft label hides the paragraph after it; a later labelled paragraph is prose', () => {
+    const t = 'Slack draft:\n\nHey team, the build is green and the release goes out today.\n\nWhat changed:\n\nThe build now runs the tests before it ships the release.'
+    expect(splitBlocks(t).map(b => b.isProse)).toEqual([false, false, true, true])
+    const reply = JSON.stringify([
+      { en: 'team', occurrence: 1, target: '团队', romanization: 'tuánduì', pos: 'noun', gloss: 'team', level: 4 },
+      { en: 'tests', occurrence: 1, target: '测试', romanization: 'cèshì', pos: 'noun', gloss: 'tests', level: 4 },
+    ])
+    const r = parseReply(reply, t, OPTS)
+    expect(r.ok && r.words.map(x => x.en)).toEqual(['tests'])
+  })
+  test('a bold label or a heading that names an email or commit also counts', () => {
+    expect(splitBlocks('**Email to the client**\n\nDear Anna, the report is ready.').map(b => b.isProse)).toEqual([false, false])
+    expect(splitBlocks('## Commit message\n\nFix the parser for empty input.').map(b => b.isProse)).toEqual([false, false])
+  })
+})
+
+describe('clause-initial linking words', () => {
+  const pick = (text: string, en: string, target: string, pos: string) =>
+    parseReply(JSON.stringify([{ en, occurrence: 1, target, romanization: 'x', pos, gloss: en, level: 1 }]), text, OPTS)
+  test('a linking word that opens a clause is kept; inside a clause it is dropped', () => {
+    expect(pick('Because the input is empty, the test fails today.', 'Because', '因为', 'conjunction')).toMatchObject({ ok: true, words: [{ target: '因为' }] })
+    expect(pick('The test fails because the function returns nothing.', 'because', '因为', 'conjunction')).toMatchObject({ ok: true, words: [] })
+    expect(pick('Basically, it swaps nouns for Chinese while you read.', 'Basically', '基本上', 'adverb')).toMatchObject({ ok: true, words: [{ target: '基本上' }] })
+    expect(pick('If it breaks, run it again and check the logs here.', 'again', '再', 'adverb')).toMatchObject({ ok: true, words: [] })
+    expect(pick('- Then run the tests and read the log output.', 'Then', '然后', 'adverb')).toMatchObject({ ok: true, words: [{ target: '然后' }] })
+  })
+})

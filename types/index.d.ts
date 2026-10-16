@@ -12,6 +12,7 @@ export type OsmosisSettings = {
   show: OsmosisShow
   isBandOn: boolean
   isStatusOn: boolean
+  copy: 'english' | 'shown'
   card: OsmosisCard
   cap: OsmosisCap
   model: OsmosisProvider

@@ -251,11 +251,12 @@ const ON_OFF = [['on', 'On'], ['off', 'Off']] as const
 const LEVELS = [['beginner', 'Beginner'], ['intermediate', 'Intermediate'], ['advanced', 'Advanced']] as const
 const DENSITIES = [['low', 'Low'], ['normal', 'Normal'], ['high', 'High']] as const
 const SHOWS = [['hanzi', 'Hanzi'], ['pinyin', 'Pinyin'], ['both', 'Both']] as const
+const COPIES = [['english', 'English'], ['shown', 'As shown']] as const
 const CAPS = [['off', 'Off'], ['100k', '100k'], ['300k', '300k'], ['1m', '1M']] as const
 const MODELS = [['haiku', 'Haiku'], ['local', 'Local']] as const
 const CARDS = [['word', 'At the word'], ['bar', 'In the bar'], ['both', 'Both']] as const
 
-export function drawSettings(els: Els, s: OsmosisSettings, act: PaneActions) {
+export function drawSettings(els: Els, s: OsmosisSettings, act: PaneActions, copyNote = '') {
   const { Box, Text, Button } = els
   const on = s.isOn ? 'on' : 'off'
   const bar = s.isBandOn ? 'on' : 'off'
@@ -269,6 +270,8 @@ export function drawSettings(els: Els, s: OsmosisSettings, act: PaneActions) {
       {choiceRow(els, 'Hover card', 'card', CARDS, s.card, v => act.setSettings({ card: v }))}
       {choiceRow(els, 'Hover bar', 'bar', ON_OFF, bar, v => act.setSettings({ isBandOn: v === 'on' }), v => (v === bar ? undefined : 'v'))}
       {choiceRow(els, 'Status line', 'status', ON_OFF, s.isStatusOn ? 'on' : 'off', v => act.setSettings({ isStatusOn: v === 'on' }))}
+      {choiceRow(els, 'Copy', 'copy', COPIES, s.copy, v => act.setSettings({ copy: v }))}
+      {s.copy === 'english' && copyNote ? <Text dimColor>{copyNote}</Text> : null}
       {choiceRow(els, 'Daily cap', 'cap', CAPS, s.cap, v => act.setSettings({ cap: v }))}
       {choiceRow(els, 'Model', 'model', MODELS, s.model, v => act.setSettings({ model: v }))}
       {s.model === 'local' ? (
@@ -293,6 +296,7 @@ export function drawHome(
   example: ExampleView | null = null,
   usage: OsmosisUsage = { days: {} },
   today = '',
+  copyNote = '',
 ): RenderElement {
   const { Box, Text, Button } = els
   const w = selected === null ? undefined : words[selected]
@@ -366,7 +370,7 @@ export function drawHome(
           </Button>
         ))}
       </Box>
-      {drawSettings(els, s, act)}
+      {drawSettings(els, s, act, copyNote)}
       {today ? (
         <Box flexDirection="column">
           {usageLines(usage, today).map(line => (
