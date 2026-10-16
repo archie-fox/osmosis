@@ -428,6 +428,7 @@ async function callHaiku($: $T, prompt: string, isWords: boolean, maxTokens: num
     prompt: isWords ? [{ text: RULES, cache: true }, { text: prompt }] : prompt,
     ...(isWords ? {} : { system: EXAMPLE_SYSTEM }),
     maxTokens,
+    effort: 'low',
     timeoutMs: 60000,
   })
   await recordUsage($, 'haiku', fromModelUsage(r.usage))
