@@ -562,7 +562,7 @@ async function translate($: $T, job: Job) {
     const worker = async () => {
       while (next < chunks.length) await run(next++).catch(() => undefined)
     }
-    await Promise.all(Array.from({ length: Math.min(8, chunks.length) }, worker))
+    await Promise.all(Array.from({ length: Math.min(12, chunks.length) }, worker))
     if (landed === 0) return await retryOrFail($, job, 'no-chunk-answered')
     await settle($, job, mergeChunks(job.text, lists, total, opts.maxPhrases, opts.known), true)
     note(`block key=${job.key} chunks=${chunks.length} landed=${landed} wall=${(await $.clock.now()) - job.queuedAt}ms`)
