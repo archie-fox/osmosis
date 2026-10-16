@@ -253,3 +253,53 @@ describe('usage, cap and the local request', () => {
     expect(parseLocalReply('<html>')).toBe(null)
   })
 })
+
+import { isWeakSwap } from '../hooks/core'
+
+describe('grammar guard', () => {
+  const block = 'Run the test again now because the function expects an empty array and it failed.'
+  const it = (en: string, target: string, pos: string) => ({ en, occurrence: 1, target, romanization: 'x', pos, gloss: en, level: 1 })
+
+  test('function words and inflected verbs are dropped; nouns and base verbs survive', () => {
+    const reply = JSON.stringify([
+      it('again', '再', 'adverb'),
+      it('now', '现在', 'adverb'),
+      it('because', '因为', 'conjunction'),
+      it('expects', '预期', 'verb'),
+      it('failed', '失败', 'verb'),
+      it('Run', '运行', 'verb'),
+      it('test', '测试', 'noun'),
+      it('function', '函数', 'noun'),
+    ])
+    const r = parseReply(reply, block, OPTS)
+    expect(r.ok && r.words.map(w => w.target)).toEqual(['运行', '测试', '函数'])
+  })
+
+  test('a plural noun is kept; a third-person verb is not', () => {
+    expect(isWeakSwap('tests', 'noun')).toBe(false)
+    expect(isWeakSwap('runs', 'verb')).toBe(true)
+    expect(isWeakSwap('pass', 'verb')).toBe(false)
+    expect(isWeakSwap('The', 'noun')).toBe(true)
+  })
+})
+
+describe('inflected verb check', () => {
+  test('base verbs that look inflected survive; real inflections are dropped', () => {
+    for (const en of ['need', 'proceed', 'embed', 'process', 'pass', 'focus', 'bring']) expect(isWeakSwap(en, 'verb')).toBe(false)
+    for (const en of ['needed', 'processes', 'embeds', 'running', 'failed', 'expects']) expect(isWeakSwap(en, 'verb')).toBe(true)
+  })
+})
+
+import { placeCard } from '../hooks/core'
+
+describe('floating card placement', () => {
+  const lines = ['电脑  diànnǎo', 'noun · computer', '电 electric + 脑 brain', 'HSK 1 · click for more']
+  const spot = (row: number) => ({ row, x: 10, avail: 90, lineLeft: 2 })
+  test('above when it fits on screen, below when only that fits, else the bar', () => {
+    expect(placeCard(spot(7), lines, 20, undefined, 100)).toMatchObject({ kind: 'above', top: 1, left: 14 })
+    expect(placeCard(spot(7), lines, 20, { first: 5, last: 30 }, 100)).toMatchObject({ kind: 'below', top: 8 })
+    expect(placeCard(spot(7), lines, 10, { first: 5, last: 30 }, 100)).toEqual({ kind: 'bar' })
+    expect(placeCard(spot(0), lines, 7, undefined, 100)).toMatchObject({ kind: 'below', top: 1 })
+    expect(placeCard(spot(0), lines, 6, undefined, 100)).toEqual({ kind: 'bar' })
+  })
+})

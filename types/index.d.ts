@@ -104,6 +104,7 @@ declare module 'claude-code' {
       usage: OsmosisUsage
       ex: StateFamily<OsmosisExample>
       health: OsmosisHealth
+      fallbacks: string[]
     }
   }
 }

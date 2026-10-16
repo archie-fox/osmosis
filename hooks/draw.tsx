@@ -16,9 +16,9 @@ import type {
   OsmosisUsage,
   OsmosisWord,
 } from '../types'
-import { cardLines, cellWidth, langInfo, padCells, placeCard, placeSwaps, scopeFor, shownText } from './core'
+import { cardLines, cellWidth, langInfo, padCells, scopeFor, shownText } from './core'
 import { usageLines } from './providers'
-import type { OnScreenRows, Part, Segment, SwapSpot, Token } from './core'
+import type { CardPlace, Part, Segment, Token } from './core'
 
 export type ExampleView = OsmosisExample | { status: 'loading' } | { status: 'cap' }
 
@@ -51,17 +51,16 @@ function drawWord(els: Els, w: OsmosisWord, scope: string, s: OsmosisSettings, k
   )
 }
 
-function drawCard({ Box, Text }: Els, w: OsmosisWord, spot: SwapSpot, onScreen: OnScreenRows) {
+function drawCard({ Box, Text }: Els, w: OsmosisWord, scope: string, p: Extract<CardPlace, { kind: 'above' | 'below' }>) {
   const lines = cardLines(w)
-  const p = placeCard(spot, lines, onScreen)
   const head = cellWidth(w.target)
-  const box = (
+  return (
     <Box
       position="absolute"
       top={p.top}
-      {...(p.side === 'left' ? { left: 0 } : { right: 0 })}
+      left={p.left}
       display="none"
-      hover={{ display: 'flex' }}
+      hover={{ scope, display: 'flex' }}
       borderStyle="round"
       borderDimColor
       flexDirection="column"
@@ -81,7 +80,6 @@ function drawCard({ Box, Text }: Els, w: OsmosisWord, spot: SwapSpot, onScreen: 
       )}
     </Box>
   )
-  return box
 }
 
 function drawToken(
@@ -91,18 +89,14 @@ function drawToken(
   msgKey: string,
   s: OsmosisSettings,
   pick: (i: number) => void,
-  spots: Map<number, SwapSpot> | null,
-  onScreen: OnScreenRows,
 ) {
   const { Box, Text } = els
   if (t.kind === 'swap') {
     const w = words[t.index]!
-    const spot = spots?.get(t.index)
     return (
       <Box key={`k-${t.index}`} flexDirection="row" flexShrink={0}>
         {drawWord(els, w, scopeFor(msgKey, t.index), s, `w-${t.index}`, () => pick(t.index))}
         {t.trailing ? <Text>{t.trailing}</Text> : null}
-        {spot ? drawCard(els, w, spot, onScreen) : null}
       </Box>
     )
   }
@@ -118,11 +112,9 @@ export function drawMessage(
   isFirst: boolean,
   s: OsmosisSettings,
   pick: (i: number) => void,
-  columns: number,
-  onScreen: OnScreenRows,
+  cards: Map<number, CardPlace> | null,
 ): RenderElement {
   const { Box, Text, Markdown } = els
-  const spots = s.card === 'bar' ? null : placeSwaps(segs, words, s.show, columns)
   return (
     <Box flexDirection="row" marginTop={1}>
       <Box minWidth={2} flexShrink={0}>
@@ -142,7 +134,7 @@ export function drawMessage(
                     </Box>
                   ) : null}
                   <Box flexDirection="row" flexWrap="wrap" flexGrow={1} flexShrink={1}>
-                    {line.tokens.map(t => drawToken(els, t, words, msgKey, s, pick, spots, onScreen))}
+                    {line.tokens.map(t => drawToken(els, t, words, msgKey, s, pick))}
                   </Box>
                 </Box>
               ))}
@@ -150,6 +142,11 @@ export function drawMessage(
           ),
         )}
       </Box>
+      {cards
+        ? [...cards.entries()].map(([index, plan]) =>
+            plan.kind === 'bar' ? null : drawCard(els, words[index]!, scopeFor(msgKey, index), plan),
+          )
+        : null}
     </Box>
   ) as RenderElement
 }
@@ -179,6 +176,7 @@ export function drawBand(
   todayCount: number,
   columns: number,
   notice = '',
+  fallbacks: readonly string[] = [],
 ): RenderElement {
   const { Box, Text } = els
   const info = langInfo(s.lang)
@@ -188,7 +186,7 @@ export function drawBand(
   return (
     <Box flexDirection="row">
       <Box flexDirection="row" flexShrink={0}>
-        {(s.card === 'word' ? [] : recent).map(r => {
+        {(s.card === 'word' ? recent.filter(r => fallbacks.includes(scopeFor(r.key, r.index))) : recent).map(r => {
           const { head, rest } = cardLine(r.word)
           const room = Math.max(10, columns - cellWidth(head) - 2)
           return (

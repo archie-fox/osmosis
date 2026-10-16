@@ -232,6 +232,27 @@ function str(v: unknown, max = 200): string {
   return typeof v === 'string' ? v.trim().slice(0, max) : ''
 }
 
+export const STOPWORDS = new Set(
+  'because but and or now again then already very also just still here there this that it the a an to of in on at for with'.split(' '),
+)
+
+export function isWeakSwap(en: string, pos: string): boolean {
+  const lower = en.toLowerCase()
+  if (STOPWORDS.has(lower)) return true
+  const last = lower.split(' ').pop() ?? lower
+  return /\bverb\b/i.test(pos) && isInflected(last)
+}
+
+const BASE_ED = new Set(['embed', 'shred', 'wed', 'bed', 'bred'])
+const BASE_ING = new Set(['bring', 'sing', 'ring', 'swing', 'sting', 'string', 'cling', 'fling', 'wring'])
+
+export function isInflected(word: string): boolean {
+  if (word.endsWith('ing')) return word.length > 4 && !BASE_ING.has(word)
+  if (word.endsWith('ed')) return word.length > 4 && !word.endsWith('eed') && !BASE_ED.has(word)
+  if (word.endsWith('s')) return word.length > 2 && !/(ss|us)$/.test(word)
+  return false
+}
+
 export type ParseOptions = {
   isMandarin: boolean
   known: ReadonlySet<string>
@@ -280,6 +301,7 @@ export function parseReply(reply: string, text: string, opts: ParseOptions): Par
     if (!en || !target || !Number.isFinite(occurrence) || occurrence < 1) continue
     if (opts.isMandarin ? !CJK.test(target) : target.toLowerCase() === en.toLowerCase()) continue
     if (seenEn.has(en.toLowerCase())) continue
+    if (isWeakSwap(en, str(o.pos, 30))) continue
     const isKnown = opts.known.has(target)
     if (isKnown && knownUsed >= 1) continue
     const start = locate(text, en, occurrence, ranges)
@@ -318,11 +340,16 @@ Rules:
 1. Pick ONLY from plain prose sentences. Never pick text inside inline code (\`like this\`), code fences, URLs, file paths, command names, identifiers (camelCase, snake_case, names with dots, slashes or digits), numbers, version strings, table rows, headings, block quotes, link text, or bold text.
 2. "en" is copied exactly, character for character and with the same case, from the block. It is a whole word or a whole phrase, never part of a word, with no punctuation around it.
 3. "occurrence" says which appearance of that exact "en" string you mean, counting from 1 at the start of the block.
-4. The translation must fit the meaning in this sentence. Prefer common, useful vocabulary. Never pick the same English word twice.
-5. Follow the level and the density given, and never go over the item limit.
-6. Avoid the learner's known words unless nothing else fits; use at most one known word.
-7. Gently prefer words from the "seen often, not saved" list when they occur naturally, so the learner reviews them.
-8. Reply with strict JSON only: one array, no prose, no code fence. If nothing fits, reply [].
+4. The learner reads the English sentence with your item dropped in its place, so pick items that still read naturally there:
+   - Prefer nouns and noun phrases ("the test", "the function"), then adjectives directly before a noun ("an empty array").
+   - Pick a verb only where the English verb is in its base form: an imperative ("Run the test"), after "to", or after a modal such as can, should or will. Never replace an inflected verb ("expects", "failed", "running").
+   - Never pick adverbs of time, frequency or degree (now, again, already, very), conjunctions (because, but, and), prepositions, pronouns, articles, particles or question words.
+5. The target item has the same part of speech and the same sense as the English word in this sentence: a noun for a noun, a verb for a verb (预期 is a noun or adjective, never the verb "expects").
+6. Fewer good items beat more weak ones. If fewer words qualify than the item limit, return fewer; never fill the limit with function words.
+7. Follow the level and the density given, and never go over the item limit.
+8. Avoid the learner's known words unless nothing else fits; use at most one known word.
+9. Gently prefer words from the "seen often, not saved" list when they occur naturally, so the learner reviews them.
+10. Reply with strict JSON only: one array, no prose, no code fence. If nothing fits, reply [].
 
 Each item has exactly these fields:
 {"en": "computer", "occurrence": 1, "target": "电脑", "romanization": "diànnǎo", "pos": "noun", "gloss": "computer", "level": 1}
@@ -335,12 +362,12 @@ Each item has exactly these fields:
 
 const LEVEL_RULES: Record<OsmosisLevel, { zh: string; other: string }> = {
   beginner: {
-    zh: 'beginner: HSK 1-2 words only; nouns and verbs; single words, no phrases.',
-    other: 'beginner: A1-A2 words only; nouns and verbs; single words, no phrases.',
+    zh: 'beginner: HSK 1-2 nouns and base-form verbs, single words. When no HSK 1-2 word fits, a common, concrete HSK 3 noun is fine; otherwise take fewer items.',
+    other: 'beginner: A1-A2 nouns and base-form verbs, single words. When no A1-A2 word fits, a common, concrete B1 noun is fine; otherwise take fewer items.',
   },
   intermediate: {
-    zh: 'intermediate: HSK 3-4 words; also adjectives and adverbs; two-word phrases are fine.',
-    other: 'intermediate: B1-B2 words; also adjectives and adverbs; two-word phrases are fine.',
+    zh: 'intermediate: HSK 3-4 words; nouns, noun phrases, adjectives before a noun, base-form verbs; two-word phrases are fine.',
+    other: 'intermediate: B1-B2 words; nouns, noun phrases, adjectives before a noun, base-form verbs; two-word phrases are fine.',
   },
   advanced: {
     zh: 'advanced: HSK 5-6 words; idioms (成语) where they fit naturally; short phrases are fine.',
@@ -510,7 +537,8 @@ export function planMessage(text: string, words: readonly OsmosisWord[]): Segmen
 
 // ---------- floating card placement ----------
 
-export type SwapSpot = { row: number; x: number; avail: number }
+export type SwapSpot = { row: number; x: number; avail: number; lineLeft: number }
+export type SwapLayout = { spots: Map<number, SwapSpot>; rows: number }
 
 function tokenWidth(t: Token, words: readonly OsmosisWord[], show: OsmosisSettings['show']): number {
   if (t.kind === 'parts') return cellWidth(t.parts.map(p => p.text).join(''))
@@ -524,7 +552,7 @@ export function placeSwaps(
   words: readonly OsmosisWord[],
   show: OsmosisSettings['show'],
   columns: number,
-): Map<number, SwapSpot> {
+): SwapLayout {
   const spots = new Map<number, SwapSpot>()
   const body = Math.max(10, columns - 2)
   let row = 0
@@ -535,7 +563,8 @@ export function placeSwaps(
       return
     }
     for (const line of seg.lines) {
-      const avail = Math.max(8, body - line.indent - (line.marker === null ? 0 : line.marker.length + 1))
+      const lineLeft = line.indent + (line.marker === null ? 0 : line.marker.length + 1)
+      const avail = Math.max(8, body - lineLeft)
       let x = 0
       for (const t of line.tokens) {
         const w = tokenWidth(t, words, show)
@@ -543,13 +572,13 @@ export function placeSwaps(
           row++
           x = 0
         }
-        if (t.kind === 'swap') spots.set(t.index, { row, x, avail })
+        if (t.kind === 'swap') spots.set(t.index, { row, x, avail, lineLeft })
         x += w
       }
       row++
     }
   })
-  return spots
+  return { spots, rows: row }
 }
 
 export const CARD_MAX = 40
@@ -563,21 +592,47 @@ export function cardLines(w: OsmosisWord): string[] {
   ].filter(Boolean)
 }
 
-export type CardPlace = { top: number; side: 'left' | 'right'; inner: number; height: number }
+export type CardPlace =
+  | { kind: 'above' | 'below'; top: number; left: number; inner: number; height: number }
+  | { kind: 'bar' }
 
 export type OnScreenRows = { first: number; last: number } | null | undefined
 
-export function placeCard(spot: SwapSpot, lines: readonly string[], onScreen: OnScreenRows): CardPlace {
+const GUTTER = 2
+
+// Rows are content rows of the message; the site adds one margin row above them.
+export function placeCard(
+  spot: SwapSpot,
+  lines: readonly string[],
+  totalRows: number,
+  onScreen: OnScreenRows,
+  columns: number,
+): CardPlace {
   const widest = Math.max(...lines.map(cellWidth))
-  const inner = Math.max(4, Math.min(widest, CARD_MAX - 4, spot.avail - 4))
+  const inner = Math.max(4, Math.min(widest, CARD_MAX - 4, columns - GUTTER - 4))
   const width = inner + 4
   const height = lines.length + 2
-  const siteRow = spot.row + 1
-  const fitsInMessage = spot.row >= height
-  const fitsOnScreen = !onScreen || siteRow - height >= onScreen.first
-  const top = fitsInMessage && fitsOnScreen ? -height : 1
-  const side = spot.x + width > spot.avail && spot.x > 0 ? 'right' : 'left'
-  return { top, side, inner, height }
+  const left = Math.max(0, Math.min(GUTTER + spot.lineLeft + spot.x, columns - width))
+  const site = (row: number) => row + 1
+  const aboveTop = spot.row - height
+  if (aboveTop >= 0 && (!onScreen || site(aboveTop) >= onScreen.first)) return { kind: 'above', top: aboveTop, left, inner, height }
+  const belowTop = spot.row + 1
+  const belowEnd = belowTop + height - 1
+  if (belowEnd < totalRows && (!onScreen || site(belowEnd) <= onScreen.last)) return { kind: 'below', top: belowTop, left, inner, height }
+  return { kind: 'bar' }
+}
+
+export function planCards(
+  segs: readonly Segment[],
+  words: readonly OsmosisWord[],
+  show: OsmosisSettings['show'],
+  columns: number,
+  onScreen: OnScreenRows,
+): Map<number, CardPlace> {
+  const layout = placeSwaps(segs, words, show, columns)
+  const plans = new Map<number, CardPlace>()
+  for (const [index, spot] of layout.spots) plans.set(index, placeCard(spot, cardLines(words[index]!), layout.rows, onScreen, columns))
+  return plans
 }
 
 export function padCells(s: string, cells: number): string {

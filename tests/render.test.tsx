@@ -1,5 +1,6 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
 
 const TEXT =
   'I opened the computer and read the file. Then I wrote a short note for you.\n\n```ts\nconst computer = 1\n```'
@@ -152,17 +153,6 @@ const BAND = {
   props: { hasSurvey: false, isWorking: false, maxRows: 6, bodyColumns: 100, scroll: SCROLL, view: {} },
 } as const
 
-test('with the hover card at the word, the band shows only its status line', async ($, on) => {
-  const { clock } = world(on, REPLY)
-  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
-  await $.ui.mount({ plugin: 'osmosis', surface: 'terminal', ...MESSAGE })
-  await clock.advance(2000)
-  await clock.settle()
-  const band = await $.ui.mount(BAND)
-  expect(walk(await band.drawn(), n => n.hover?.display === 'flex')).toHaveLength(0)
-  expect(await band.find({ text: /Osmosis 中文 · beginner/ })).toBeDefined()
-})
-
 test('the band holds a hidden card under the same hover scope', async ($, on) => {
   const { clock } = world(on, REPLY)
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
@@ -303,50 +293,6 @@ test('the on/off toggle in the pane turns the reply hook back to the engine', as
   await msg.redraw()
   expect(await msg.find({ text: 'ENGINE' })).toBeDefined()
   expect(await msg.find({ key: 'w-0' })).toBeUndefined()
-})
-
-const cardIn = (tree: unknown, index: number) => {
-  const holder = walk(tree, n => n.type === 'Box' && n.props?.key === `k-${index}`)[0]
-  const card = (holder?.children ?? []).find(c => (c as Node).type === 'Box' && (c as Node).props?.position === 'absolute') as Node | undefined
-  return { holder, card }
-}
-
-test('a swapped word is a keyed Box holding a hidden absolute card that hover reveals', async ($, on) => {
-  const { clock } = world(on, REPLY)
-  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
-  const msg = await $.ui.mount({ plugin: 'osmosis', surface: 'terminal', viewport: { columns: 100, rows: 40 }, ...MESSAGE })
-  await clock.advance(2000)
-  await clock.settle()
-  const tree = await msg.drawn()
-  const { holder, card } = cardIn(tree, 0)
-  expect(walk(holder, n => n.type === 'Button' && n.props?.key === 'w-0')).toHaveLength(1)
-  expect(card?.props?.display).toBe('none')
-  expect(card?.hover?.display).toBe('flex')
-  expect(card?.props?.borderStyle).toBe('round')
-  expect(JSON.stringify(card)).toContain('click for more')
-  expect(hoverOf(tree, 'w-0')?.scope).toMatch(/^tw-/)
-})
-
-test('the card sits below a word on the first row and above a word lower down', async ($, on) => {
-  const { clock } = world(on, REPLY)
-  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
-  const first = await $.ui.mount({ plugin: 'osmosis', surface: 'terminal', viewport: { columns: 100, rows: 40 }, ...MESSAGE })
-  const lowText = LOW_TEXT
-  const low = await $.ui.mount({
-    plugin: 'osmosis',
-    surface: 'terminal',
-    viewport: { columns: 100, rows: 40 },
-    component: 'AssistantMessage',
-    props: { text: lowText, isFirstOfReply: true },
-  })
-  await clock.advance(2000)
-  await clock.settle()
-  await clock.advance(2000)
-  await clock.settle()
-  expect(cardIn(await first.drawn(), 0).card?.props?.top).toBe(1)
-  const above = cardIn(await low.drawn(), 0).card
-  expect(above?.props?.top).toBe(-6)
-  expect(above?.props?.left).toBe(0)
 })
 
 test('with the hover card in the bar, the word draws no floating card', async ($, on) => {
@@ -523,4 +469,56 @@ test('the status line row hides and shows the status entry', async ($, on) => {
   const r = await $.command.run({ command: 'osmosis', args: 'status off', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } })
   expect(r.text).toBe('Osmosis status line off.')
   expect(calls.status.at(-1)).toBe(undefined)
+})
+
+const FIRST_TEXT =
+  '- I opened the computer and read the file.\n' + [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(n => `- Item number ${n} is a plain line.`).join('\n')
+const SHORT_TEXT = '- Item one is here and it is fine.\n- Item two is here as well.\n- I opened the computer and read the file.'
+
+const mountMsg = ($: Engine, text: string) =>
+  $.ui.mount({ plugin: 'osmosis', surface: 'terminal', viewport: { columns: 100, rows: 40 }, component: 'AssistantMessage', props: { text, isFirstOfReply: true } })
+
+const floating = (tree: unknown) => ((tree as Node).children ?? []).filter(c => (c as Node).props?.position === 'absolute') as Node[]
+
+test('floating cards are the last children of the message root, revealed by the word scope', async ($, on) => {
+  const { clock } = world(on, REPLY, {}, { history: [LOW_TEXT] })
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  const msg = await mountMsg($, LOW_TEXT)
+  await settleAll(clock)
+  const tree = (await msg.drawn()) as Node
+  const kids = tree.children ?? []
+  const card = kids[kids.length - 1] as Node
+  expect(card.props?.position).toBe('absolute')
+  expect(card.props?.display).toBe('none')
+  expect(card.hover?.display).toBe('flex')
+  expect(card.hover?.scope).toBe(hoverOf(tree, 'w-0')?.scope)
+  expect(walk(walk(tree, n => n.props?.key === 'k-0')[0], n => n.props?.position === 'absolute')).toHaveLength(0)
+})
+
+test('a card goes below a first-row word, above a lower word, and to the bar at the end of a short message', async ($, on) => {
+  const { clock } = world(on, REPLY, {}, { history: [FIRST_TEXT, LOW_TEXT, SHORT_TEXT] })
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  const first = await mountMsg($, FIRST_TEXT)
+  const low = await mountMsg($, LOW_TEXT)
+  const short = await mountMsg($, SHORT_TEXT)
+  await settleAll(clock)
+  expect(floating(await first.drawn())[0]?.props?.top).toBe(1)
+  expect(floating(await low.drawn())[0]?.props?.top).toBe(1)
+  expect(floating(await low.drawn())[0]?.props?.left).toBe(2 + 2 + 'I opened the '.length)
+  expect(floating(await short.drawn())).toHaveLength(0)
+})
+
+test('in word mode, a word with no room for a floating card gets a bar card; others do not', async ($, on) => {
+  const { clock } = world(on, REPLY, {}, { history: [LOW_TEXT, SHORT_TEXT] })
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  const low = await mountMsg($, LOW_TEXT)
+  const short = await mountMsg($, SHORT_TEXT)
+  await settleAll(clock)
+  const lowScope = hoverOf(await low.drawn(), 'w-0')?.scope
+  const shortScope = hoverOf(await short.drawn(), 'w-0')?.scope
+  const band = await $.ui.mount(BAND_PROPS)
+  const scopes = walk(await band.drawn(), n => n.hover?.display === 'flex').map(n => n.hover?.scope)
+  expect(scopes).toContain(shortScope)
+  expect(scopes).not.toContain(lowScope)
+  expect(await band.find({ text: /Osmosis 中文 · beginner/ })).toBeDefined()
 })

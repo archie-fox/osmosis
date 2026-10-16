@@ -52,7 +52,7 @@ Type `/osmosis` to open the pane. Its Settings section has a button for each cho
 - **Level**: Beginner (HSK 1-2), Intermediate (HSK 3-4), or Advanced (HSK 5-6, with idioms).
 - **Density**: Low (about 1 word in 3 sentences), Normal (about 1 per sentence), or High (about 2 per sentence).
 - **Show**: Hanzi (characters), Pinyin, or Both.
-- **Hover card**: At the word (the default: the card shows next to the word you point at), In the bar (a one-line card in the bar above the prompt), or Both.
+- **Hover card**: At the word (the default: the card shows above or below the word you point at), In the bar (a one-line card in the bar above the prompt), or Both. When there is no room next to a word, its card shows in the bar instead.
 - **Hover bar**: On or Off. Press `v` to switch. Off hides the bar above the prompt, and its card too.
 - **Status line**: On or Off. Off hides the `🌱 中文 · <level>` entry under the prompt.
 - **Daily cap**: Off, 100k, 300k (the default), or 1M Haiku tokens per day. At the cap, Osmosis starts no new translations until the next day, replies stay in English, and the bar says "daily cap reached". The cap counts Haiku tokens only.

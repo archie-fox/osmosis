@@ -25,8 +25,10 @@ import {
   normText,
   parseReply,
   pickVoice,
+  planCards,
   planMessage,
   reviewLists,
+  scopeFor,
   swapCap,
 } from './core'
 import type { HistoryRow } from './core'
@@ -70,6 +72,7 @@ const quizAtom = atom({ plugin: 'osmosis', key: 'quiz' } as const, null)
 const progressAtom = atom({ plugin: 'osmosis', key: 'progress' } as const, EMPTY_PROGRESS)
 const finalsAtom = atom({ plugin: 'osmosis', key: 'finals' } as const, [])
 const usageAtom = atom({ plugin: 'osmosis', key: 'usage' } as const, EMPTY_USAGE)
+const fallbacksAtom = atom({ plugin: 'osmosis', key: 'fallbacks' } as const, [])
 const healthAtom = atom({ plugin: 'osmosis', key: 'health' } as const, { local: 'unknown' as const })
 const TX = { plugin: 'osmosis', key: 'tx' } as const
 const EX = { plugin: 'osmosis', key: 'ex' } as const
@@ -96,6 +99,8 @@ let voice: string | undefined
 let isTicking = false
 let dict: Dict | null = null
 let dictLoading: Promise<Dict> | null = null
+const fallbackByMsg = new Map<string, string[]>()
+let isFallbackDirty = false
 
 // ---------- persistence ----------
 
@@ -413,7 +418,21 @@ async function tickOnce($: $T) {
     const old = [...jobs.values()].sort((a, b) => a.updatedAt - b.updatedAt).slice(0, jobs.size - MAX_JOBS)
     for (const j of old) jobs.delete(j.requestId)
   }
+  if (isFallbackDirty) {
+    isFallbackDirty = false
+    const all = [...new Set([...fallbackByMsg.values()].flat())].slice(-200)
+    await update($, fallbacksAtom, () => all)
+  }
   if (ticks % 12 === 0) await flush($)
+}
+
+function noteFallbacks(msgKey: string, scopes: string[]) {
+  const was = fallbackByMsg.get(msgKey) ?? []
+  if (was.length === scopes.length && was.every((x, i) => x === scopes[i])) return
+  fallbackByMsg.delete(msgKey)
+  if (scopes.length) fallbackByMsg.set(msgKey, scopes)
+  while (fallbackByMsg.size > 60) fallbackByMsg.delete(fallbackByMsg.keys().next().value as string)
+  isFallbackDirty = true
 }
 
 // ---------- pane actions ----------
@@ -634,7 +653,9 @@ export const register: Register = on => {
         await update($, viewAtom, () => 'home' as const)
         await openPane($)
       })()
-    return drawMessage({ Box, Text, Button, Markdown }, segs, words, key, e.props.isFirstOfReply, s, pick, e.viewport?.columns ?? 100, e.props.onScreen)
+    const cards = s.card === 'bar' ? null : planCards(segs, words, s.show, e.viewport?.columns ?? 100, e.props.onScreen)
+    if (cards) noteFallbacks(key, [...cards.entries()].filter(([, p]) => p.kind === 'bar').map(([i]) => scopeFor(key, i)))
+    return drawMessage({ Box, Text, Button, Markdown }, segs, words, key, e.props.isFirstOfReply, s, pick, cards)
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -652,7 +673,7 @@ export const register: Register = on => {
         ? 'local model unreachable'
         : ''
     const { Box, Text, Button, Markdown } = $.ui.resolve(e)
-    return drawBand({ Box, Text, Button, Markdown }, recent, s, count, e.props.bodyColumns, notice)
+    return drawBand({ Box, Text, Button, Markdown }, recent, s, count, e.props.bodyColumns, notice, await read($, fallbacksAtom))
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
