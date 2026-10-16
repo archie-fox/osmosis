@@ -72,9 +72,9 @@ const MAX_FINALS = 200
 const EXAMPLE_ITEMS = 500
 const LOCAL_TIMEOUT_MS = 90_000
 // Haiku 4.5 runs without thinking unless asked; the `haiku` alias thinks by default.
-// Haiku 4.5 does not think unless asked; the plugin API cannot turn thinking off on 5.5.
-const HAIKU = 'claude-haiku-4-5'
-const MAX_OUT = 4000
+// Haiku 5.5 always thinks; low effort keeps it short, a high cap keeps lists whole.
+const HAIKU = 'claude-haiku-5-5'
+const MAX_OUT = 8000
 const EXAMPLE_SYSTEM = 'You write short example sentences for a language learner. Reply with strict JSON only.'
 
 const settingsAtom = atom({ plugin: 'osmosis', key: 'settings' } as const, DEFAULT_SETTINGS)
@@ -434,9 +434,10 @@ async function callHaiku($: $T, prompt: string, isWords: boolean, maxTokens: num
     prompt: isWords ? [{ text: RULES, cache: true }, { text: prompt }] : prompt,
     ...(isWords ? {} : { system: EXAMPLE_SYSTEM }),
     maxTokens: Math.max(maxTokens, MAX_OUT),
+    effort: 'low',
     timeoutMs: 60000,
   })
-  note(`call model=${HAIKU} maxTokens=${Math.max(maxTokens, MAX_OUT)} in=${r.usage.input_tokens} out=${r.usage.output_tokens}`)
+  note(`call model=${HAIKU} effort=low maxTokens=${Math.max(maxTokens, MAX_OUT)} in=${r.usage.input_tokens} out=${r.usage.output_tokens}`)
   await recordUsage($, 'haiku', fromModelUsage(r.usage))
   return r.isAnswered ? { ok: true, text: r.text } : { ok: false, reason: r.reason }
 }
