@@ -2,6 +2,8 @@ import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
+import { DEFAULT_SETTINGS, keyFor } from '../hooks/core'
+
 const TEXT =
   'I opened the computer and read the file. Then I wrote a short note for you.\n\n```ts\nconst computer = 1\n```'
 
@@ -53,6 +55,9 @@ const DICT: Record<string, string> = {
     '建\tjiàn\tto establish',
     '构建\tgòujiàn\tto construct (sth abstract)',
     '行\tháng\trow\txíng\tto walk',
+    '再\tzài\tagain',
+    '运行\tyùnxíng\tto run',
+    '测试\tcèshì\tto test',
   ].join('\n'),
   'hsk.tsv': '电脑\t1\n行\t4\n',
 }
@@ -223,7 +228,7 @@ test('/osmosis off turns every hook back to the engine', async ($, on) => {
     origin: { kind: 'composer' },
     presentation: { isFullscreen: true, columns: 120 },
   })
-  expect(r.text).toBe('Osmosis is off.')
+  expect(r.text).toBe('Osmosis: Off. Turn all translation on or off.')
   const band = await $.ui.mount({
     plugin: 'osmosis',
     surface: 'terminal',
@@ -307,7 +312,7 @@ test('with the hover card in the bar, the word draws no floating card', async ($
   const { clock } = world(on, REPLY)
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
   const r = await $.command.run({ command: 'osmosis', args: 'card bar', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } })
-  expect(r.text).toBe('Osmosis hover card: in the bar.')
+  expect(r.text).toBe('Osmosis hover card: In the bar. Where the word card appears when you point at a word.')
   const msg = await $.ui.mount({ plugin: 'osmosis', surface: 'terminal', ...MESSAGE })
   await clock.advance(2000)
   await clock.settle()
@@ -445,7 +450,7 @@ test('the local provider sends a JSON-schema chat request and is corrected by CC
   const pane = await $.ui.mount(PANE_PROPS)
   const text = await paneText(pane)
   expect(text).toContain('gòujiàn')
-  expect(text).not.toContain('HSK 1')
+  expect(text).not.toContain('noun · HSK')
   expect(text).toContain('构 construct + 建 establish')
   expect(text).toContain('Local model today: 1 calls · 380 tokens')
 })
@@ -475,7 +480,7 @@ test('the status line row hides and shows the status entry', async ($, on) => {
   await pane.press({ key: 'status-on' })
   expect(calls.status.at(-1)).toMatch(/中文 · advanced/)
   const r = await $.command.run({ command: 'osmosis', args: 'status off', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } })
-  expect(r.text).toBe('Osmosis status line off.')
+  expect(r.text).toBe('Osmosis status line: Off. The \u{1F331} entry under the prompt.')
   expect(calls.status.at(-1)).toBe(undefined)
 })
 
@@ -557,4 +562,73 @@ test('with Copy set to As shown, the clipboard is left alone', async ($, on) => 
   expect(clip.writes).toHaveLength(0)
   const pane = await $.ui.mount(PANE_PROPS)
   expect((await pane.find({ key: 'copy-shown' }))?.props.variant).toBe('primary')
+})
+
+test('a reply whose words are cached draws at once, and stored settings without new keys get defaults', async ($, on) => {
+  const words = [{ en: 'computer', occurrence: 1, target: '电脑', romanization: 'diànnǎo', pos: 'noun', gloss: 'computer', literal: '', exampleTarget: '', exampleRomanization: '', exampleEn: '', level: 1, start: TEXT.indexOf('computer'), end: TEXT.indexOf('computer') + 8 }]
+  const settings = { isOn: true, level: 'beginner', density: 'normal', show: 'hanzi', isBandOn: true, card: 'word', lang: 'Mandarin' }
+  const key = keyFor(TEXT, { ...DEFAULT_SETTINGS, ...settings } as typeof DEFAULT_SETTINGS)
+  const { calls } = world(on, REPLY, { settings, cache: [[key, words]] })
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  const msg = await $.ui.mount({ plugin: 'osmosis', surface: 'terminal', ...MESSAGE })
+  expect(await msg.find({ key: 'w-0' })).toBeDefined()
+  expect(calls.model).toBe(0)
+  const pane = await $.ui.mount(PANE_PROPS)
+  for (const k of ['copy-english', 'cap-300k', 'model-haiku', 'status-on']) expect((await pane.find({ key: k }))?.props.variant).toBe('primary')
+})
+
+test('the debug trace writes keys and counts to the plugin data folder, never reply text', async ($, on) => {
+  mock.env(on, { HOME: '/home/someone' })
+  const files: { path: string; text: string }[] = []
+  on('fs.write', ($, e) => {
+    files.push({ path: e.path, text: e.text })
+    return { value: undefined }
+  })
+  const { clock } = world(on, REPLY)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  const r = await $.command.run({ command: 'osmosis', args: 'debug on', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } })
+  expect(r.text).toContain('/home/someone/.claude/plugins/data/osmosis/debug.log')
+  await $.ui.mount({ plugin: 'osmosis', surface: 'terminal', ...MESSAGE })
+  await settleAll(clock)
+  const last = files.at(-1)
+  expect(last?.path).toBe('/home/someone/.claude/plugins/data/osmosis/debug.log')
+  expect(last?.text).toMatch(/render key=[0-9a-f]{16} tx=ok hit=no final=yes queued=no swaps=1 cards=0 bar=1/)
+  expect(last?.text).toMatch(/settle key=[0-9a-f]{16} words=1 fresh=true/)
+  expect(last?.text).toMatch(/usage haiku in=1000 out=500/)
+  expect(last?.text).not.toContain('opened')
+  expect(last?.text).not.toContain('电脑')
+})
+
+test('/osmosis help lists every setting with its values and effect; the pane shows each description', async ($, on) => {
+  world(on, REPLY)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  const r = await $.command.run({ command: 'osmosis', args: 'help', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } })
+  expect(r.text).toContain('- coverage natural|maximum: Natural keeps English grammar intact; Maximum swaps more words.')
+  expect(r.text).toContain('- cap off|100k|300k|1m: Stop translating after this many Haiku tokens a day.')
+  const c = await $.command.run({ command: 'osmosis', args: 'coverage maximum', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } })
+  expect(c.text).toBe('Osmosis coverage: Maximum. Natural keeps English grammar intact; Maximum swaps more words.')
+  const pane = await $.ui.mount(PANE_PROPS)
+  expect((await pane.find({ key: 'coverage-maximum' }))?.props.variant).toBe('primary')
+  const text = await paneText(pane)
+  for (const help of ['Turn all translation on or off.', 'Which words swap: HSK 1-2, 3-4, or 5-6.', 'Haiku (default) or a local model on your machine.']) expect(text).toContain(help)
+})
+
+const PHRASE_TEXT = 'If it breaks, run the test again and check the logs for the error.'
+
+test('a phrase at intermediate is kept and drawn as one swap; at beginner it is dropped', async ($, on) => {
+  const reply = JSON.stringify([
+    { kind: 'phrase', en: 'run the test again', occurrence: 1, target: '再运行测试', romanization: 'zai yunxing ceshi', pos: 'phrase', gloss: 'run the test again', level: 2 },
+    { kind: 'word', en: 'logs', occurrence: 1, target: '日志', romanization: 'rìzhì', pos: 'noun', gloss: 'logs', level: 5 },
+  ])
+  const { clock } = world(on, reply, { settings: { level: 'intermediate' } }, { history: [PHRASE_TEXT] })
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  const msg = await $.ui.mount({ plugin: 'osmosis', surface: 'terminal', component: 'AssistantMessage', props: { text: PHRASE_TEXT, isFirstOfReply: true } })
+  await settleAll(clock)
+  const phrase = await msg.find({ key: 'w-0' })
+  expect(phrase?.text).toBe('再运行测试')
+  expect(await paneText(msg)).toContain('If it breaks, ')
+  expect(await paneText(msg)).not.toContain('run the test again')
+  await msg.press({ key: 'w-0' })
+  const pane = await $.ui.mount(PANE_PROPS)
+  expect(await paneText(pane)).toContain('zài yùnxíng cèshì')
 })

@@ -13,6 +13,8 @@ export type OsmosisSettings = {
   isBandOn: boolean
   isStatusOn: boolean
   copy: 'english' | 'shown'
+  debug: boolean
+  coverage: 'natural' | 'maximum'
   card: OsmosisCard
   cap: OsmosisCap
   model: OsmosisProvider
@@ -36,6 +38,7 @@ export type OsmosisWord = {
   start: number
   end: number
   verified?: boolean
+  kind?: 'word' | 'phrase'
   dictGloss?: string
 }
 

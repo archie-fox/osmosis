@@ -16,7 +16,7 @@ import type {
   OsmosisUsage,
   OsmosisWord,
 } from '../types'
-import { cardLines, cellWidth, langInfo, padCells, scopeFor, shownText } from './core'
+import { SETTING_ROWS, cardLines, cellWidth, langInfo, padCells, scopeFor, shownText } from './core'
 import { usageLines } from './providers'
 import type { CardPlace, Part, Segment, Token } from './core'
 
@@ -247,36 +247,33 @@ function choiceRow<V extends string>(
   )
 }
 
-const ON_OFF = [['on', 'On'], ['off', 'Off']] as const
-const LEVELS = [['beginner', 'Beginner'], ['intermediate', 'Intermediate'], ['advanced', 'Advanced']] as const
-const DENSITIES = [['low', 'Low'], ['normal', 'Normal'], ['high', 'High']] as const
-const SHOWS = [['hanzi', 'Hanzi'], ['pinyin', 'Pinyin'], ['both', 'Both']] as const
-const COPIES = [['english', 'English'], ['shown', 'As shown']] as const
-const CAPS = [['off', 'Off'], ['100k', '100k'], ['300k', '300k'], ['1m', '1M']] as const
-const MODELS = [['haiku', 'Haiku'], ['local', 'Local']] as const
-const CARDS = [['word', 'At the word'], ['bar', 'In the bar'], ['both', 'Both']] as const
-
 export function drawSettings(els: Els, s: OsmosisSettings, act: PaneActions, copyNote = '') {
   const { Box, Text, Button } = els
-  const on = s.isOn ? 'on' : 'off'
-  const bar = s.isBandOn ? 'on' : 'off'
   return (
     <Box flexDirection="column">
       <Text bold>Settings</Text>
-      {choiceRow(els, 'Osmosis', 'set', ON_OFF, on, v => act.setSettings({ isOn: v === 'on' }), v => (v === on ? undefined : 'o'))}
-      {choiceRow(els, 'Level', 'level', LEVELS, s.level, v => act.setSettings({ level: v }))}
-      {choiceRow(els, 'Density', 'density', DENSITIES, s.density, v => act.setSettings({ density: v }))}
-      {choiceRow(els, 'Show', 'show', SHOWS, s.show, v => act.setSettings({ show: v }))}
-      {choiceRow(els, 'Hover card', 'card', CARDS, s.card, v => act.setSettings({ card: v }))}
-      {choiceRow(els, 'Hover bar', 'bar', ON_OFF, bar, v => act.setSettings({ isBandOn: v === 'on' }), v => (v === bar ? undefined : 'v'))}
-      {choiceRow(els, 'Status line', 'status', ON_OFF, s.isStatusOn ? 'on' : 'off', v => act.setSettings({ isStatusOn: v === 'on' }))}
-      {choiceRow(els, 'Copy', 'copy', COPIES, s.copy, v => act.setSettings({ copy: v }))}
-      {s.copy === 'english' && copyNote ? <Text dimColor>{copyNote}</Text> : null}
-      {choiceRow(els, 'Daily cap', 'cap', CAPS, s.cap, v => act.setSettings({ cap: v }))}
-      {choiceRow(els, 'Model', 'model', MODELS, s.model, v => act.setSettings({ model: v }))}
-      {s.model === 'local' ? (
-        <Text dimColor>{`Local endpoint: ${s.endpoint}${s.localModel ? ` (${s.localModel})` : ''} \u00b7 change with /osmosis endpoint <url>`}</Text>
-      ) : null}
+      {SETTING_ROWS.map(row => {
+        const current = row.values.find(v => v[2] === s[row.key])?.[0] ?? ''
+        const toggle = row.key === 'isOn' ? 'o' : row.key === 'isBandOn' ? 'v' : undefined
+        return (
+          <Box flexDirection="column">
+            {choiceRow(
+              els,
+              row.label,
+              row.keyName,
+              row.values.map(v => [v[0], v[1]] as const),
+              current,
+              v => act.setSettings({ [row.key]: row.values.find(x => x[0] === v)?.[2] } as Partial<OsmosisSettings>),
+              toggle ? v => (v === current ? undefined : toggle) : undefined,
+            )}
+            <Text dimColor>{`  ${row.help}`}</Text>
+            {row.key === 'copy' && s.copy === 'english' && copyNote ? <Text dimColor>{`  ${copyNote}`}</Text> : null}
+            {row.key === 'model' && s.model === 'local' ? (
+              <Text dimColor>{`  Local endpoint: ${s.endpoint}${s.localModel ? ` (${s.localModel})` : ''} \u00b7 change with /osmosis endpoint <url>`}</Text>
+            ) : null}
+          </Box>
+        )
+      })}
       <Box flexDirection="row" columnGap={1} marginTop={1}>
         <Button key="view-bank" label="Word bank" hotkey="w" onPress={() => act.openView('bank')} />
         <Button key="view-quiz" label="Quiz" hotkey="q" onPress={() => act.openView('quiz')} />

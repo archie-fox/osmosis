@@ -361,3 +361,66 @@ describe('clause-initial linking words', () => {
     expect(pick('- Then run the tests and read the log output.', 'Then', '然后', 'adverb')).toMatchObject({ ok: true, words: [{ target: '然后' }] })
   })
 })
+
+import { dayOf, extractJson, parseUtcOffset, setDayOffset } from '../hooks/core'
+
+describe('robustness', () => {
+  test('day keys use the local date', () => {
+    const ms = Date.parse('2026-10-16T05:03:00Z')
+    expect(parseUtcOffset('-0700')).toBe(-420)
+    setDayOffset(-420)
+    expect(dayOf(ms)).toBe('2026-10-15')
+    setDayOffset(0)
+    expect(dayOf(ms)).toBe('2026-10-16')
+  })
+  test('a reply cut off by the token cap keeps its complete items', () => {
+    const cut = '[{"en":"test","occurrence":1,"target":"测试"},{"en":"note","occurrence":1,"tar'
+    expect(extractJson(cut)).toEqual([{ en: 'test', occurrence: 1, target: '测试' }])
+  })
+})
+
+import { phraseCap, keyFor as keyFor2 } from '../hooks/core'
+import { segment, verifyPhrase } from '../hooks/dict'
+
+describe('phrases and coverage', () => {
+  const text = 'If it breaks, run the test again and check the logs for the error.'
+  const phrase = { kind: 'phrase', en: 'run the test again', occurrence: 1, target: '再运行测试', romanization: 'zai yunxing ceshi', pos: 'phrase', gloss: 'run the test again', level: 1 }
+  const again = { kind: 'word', en: 'again', occurrence: 1, target: '再', romanization: 'zài', pos: 'adverb', gloss: 'again', level: 1 }
+
+  test('phrase limits follow level and coverage', () => {
+    expect([phraseCap('beginner', 'natural'), phraseCap('intermediate', 'natural'), phraseCap('advanced', 'natural'), phraseCap('beginner', 'maximum')]).toEqual([0, 1, 2, 1])
+  })
+
+  test('a phrase is kept at intermediate and dropped at beginner (natural)', () => {
+    const kept = parseReply(JSON.stringify([phrase]), text, { ...OPTS, maxPhrases: 1 })
+    expect(kept.ok && kept.words.map(w => [w.target, w.kind, text.slice(w.start, w.end)])).toEqual([['再运行测试', 'phrase', 'run the test again']])
+    const dropped = parseReply(JSON.stringify([phrase]), text, { ...OPTS, maxPhrases: 0 })
+    expect(dropped.ok && dropped.words).toEqual([])
+  })
+
+  test('maximum keeps an adverb that natural drops', () => {
+    expect(parseReply(JSON.stringify([again]), text, { ...OPTS, coverage: 'natural' })).toMatchObject({ ok: true, words: [] })
+    expect(parseReply(JSON.stringify([again]), text, { ...OPTS, coverage: 'maximum' })).toMatchObject({ ok: true, words: [{ target: '再' }] })
+  })
+
+  test('the dictionary segments a phrase and builds its pinyin, breakdown and level', () => {
+    const d = {
+      words: parseCedict('再\tzài\tagain\n运行\tyùnxíng\tto run\n测试\tcèshì\tto test\n运\tyùn\tto move\n行\tháng\trow\txíng\tto walk'),
+      hsk: parseHsk('再\t2\n运行\t5\n测试\t5\n'),
+    }
+    expect(segment('再运行测试', d)).toEqual(['再', '运行', '测试'])
+    const w = verifyPhrase({ ...phrase, kind: 'phrase', literal: '', exampleTarget: '', exampleRomanization: '', exampleEn: '', start: 0, end: 1 } as never, d)
+    expect([w.romanization, w.literal, w.level, w.verified]).toEqual(['zài yùnxíng cèshì', '再 again + 运行 run + 测试 test', 5, true])
+  })
+
+  test('copy reverts a whole phrase to its English span', () => {
+    const r = parseReply(JSON.stringify([phrase]), text, { ...OPTS, maxPhrases: 1 })
+    if (!r.ok) throw new Error('parse')
+    expect(revertCopy('If it breaks, 再运行测试 and check', [{ text, words: r.words }], 'hanzi')).toBe('If it breaks, run the test again and check')
+    expect(revertCopy('breaks, 再运行测试 zai yunxing ceshi and', [{ text, words: r.words }], 'both')).toBe('breaks, run the test again and')
+  })
+
+  test('the cache key differs by coverage', () => {
+    expect(keyFor2(text, DEFAULT_SETTINGS)).not.toBe(keyFor2(text, { ...DEFAULT_SETTINGS, coverage: 'maximum' }))
+  })
+})

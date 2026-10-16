@@ -17,6 +17,8 @@ export const DEFAULT_SETTINGS: OsmosisSettings = {
   isBandOn: true,
   isStatusOn: true,
   copy: 'english',
+  debug: false,
+  coverage: 'natural',
   card: 'word',
   cap: '300k',
   model: 'haiku',
@@ -46,7 +48,7 @@ export function hashText(text: string): string {
 }
 
 export function keyFor(text: string, s: OsmosisSettings): string {
-  return hashText(`${s.lang}|${s.level}|${s.density}|${text}`)
+  return hashText(`${s.lang}|${s.level}|${s.density}|${s.coverage}|${text}`)
 }
 
 export function scopeFor(key: string, index: number): string {
@@ -208,9 +210,9 @@ const TRAIL_PUNCT = /[.,;:!?)"'”’\]]+$/
 const CJK = /[㐀-鿿豈-﫿]/
 
 function isPlainPhrase(en: string): boolean {
-  if (en.length === 0 || en.length > 40) return false
+  if (en.length === 0 || en.length > 60) return false
   const words = en.split(' ')
-  if (words.length > 4) return false
+  if (words.length > 5) return false
   return words.every(w => WORD.test(w) && !/[a-z][A-Z]/.test(w) && !/^[A-Z]{2,}$/.test(w))
 }
 
@@ -290,6 +292,14 @@ export type ParseOptions = {
   isMandarin: boolean
   known: ReadonlySet<string>
   cap: number
+  maxPhrases?: number
+  coverage?: OsmosisSettings['coverage']
+}
+
+export function phraseCap(level: OsmosisSettings['level'], coverage: OsmosisSettings['coverage']): number {
+  if (level === 'advanced') return 2
+  if (level === 'intermediate') return 1
+  return coverage === 'maximum' ? 1 : 0
 }
 
 export type ParseResult = { ok: true; words: OsmosisWord[] } | { ok: false; reason: string }
@@ -298,7 +308,8 @@ export function extractJson(reply: string): unknown {
   const cleaned = reply.replace(/```(?:json)?/gi, '')
   const a = cleaned.indexOf('[')
   const b = cleaned.lastIndexOf(']')
-  if (a === -1 || b <= a) {
+  if (a !== -1 && b <= a) return salvageArray(cleaned.slice(a))
+  if (a === -1) {
     const o = cleaned.indexOf('{')
     const p = cleaned.lastIndexOf('}')
     if (o === -1 || p <= o) return undefined
@@ -312,8 +323,21 @@ export function extractJson(reply: string): unknown {
   try {
     return JSON.parse(cleaned.slice(a, b + 1))
   } catch {
-    return undefined
+    return salvageArray(cleaned.slice(a))
   }
+}
+
+// A reply cut off by the token cap: keep the complete items before the cut.
+function salvageArray(text: string): unknown {
+  for (let end = text.lastIndexOf('}'); end > 0; end = text.lastIndexOf('}', end - 1)) {
+    try {
+      const v = JSON.parse(`${text.slice(0, end + 1)}]`)
+      if (Array.isArray(v)) return v
+    } catch {
+      // try an earlier item end
+    }
+  }
+  return undefined
 }
 
 export function parseReply(reply: string, text: string, opts: ParseOptions): ParseResult {
@@ -324,6 +348,7 @@ export function parseReply(reply: string, text: string, opts: ParseOptions): Par
   const taken: Range[] = []
   const seenEn = new Set<string>()
   let knownUsed = 0
+  let phrases = 0
   for (const item of data) {
     if (words.length >= Math.min(opts.cap, MAX_SWAPS)) break
     if (typeof item !== 'object' || item === null) continue
@@ -336,9 +361,12 @@ export function parseReply(reply: string, text: string, opts: ParseOptions): Par
     if (seenEn.has(en.toLowerCase())) continue
     const isKnown = opts.known.has(target)
     if (isKnown && knownUsed >= 1) continue
+    const enWords = en.split(' ').length
+    const kind: 'word' | 'phrase' = o.kind === 'phrase' || enWords > 3 ? 'phrase' : 'word'
+    if (kind === 'phrase' && (enWords < 2 || enWords > 5 || phrases >= (opts.maxPhrases ?? 0))) continue
     const start = locate(text, en, occurrence, ranges)
     if (start === null) continue
-    if (isWeakSwap(en, str(o.pos, 30), isClauseStart(text, start))) continue
+    if (kind === 'word' && opts.coverage !== 'maximum' && isWeakSwap(en, str(o.pos, 30), isClauseStart(text, start))) continue
     const end = start + en.length
     if (taken.some(r => start < r.end && r.start < end)) continue
     const lvl = Number(o.level ?? o.hsk)
@@ -356,7 +384,9 @@ export function parseReply(reply: string, text: string, opts: ParseOptions): Par
       level: Number.isInteger(lvl) && lvl >= 1 && lvl <= 6 ? lvl : null,
       start,
       end,
+      kind,
     })
+    if (kind === 'phrase') phrases++
     taken.push({ start, end })
     seenEn.add(en.toLowerCase())
     if (isKnown) knownUsed++
@@ -385,11 +415,16 @@ Rules:
 9. Gently prefer words from the "seen often, not saved" list when they occur naturally, so the learner reviews them.
 10. Reply with strict JSON only: one array, no prose, no code fence. If nothing fits, reply [].
 
+11. A "phrase" item replaces a contiguous English span of 2-5 words inside one clause ("run the test again") with one natural Chinese phrase in correct Chinese word order (再运行测试). The phrase must make sense on its own and drop cleanly into the English sentence where the span was. No punctuation inside the span except an apostrophe; never across inline code or links. Use phrases only up to the phrase limit given; a phrase counts toward the item limit.
+12. Coverage "natural" keeps rules 4-6. Coverage "maximum" lifts rules 4 and 5: any part of speech may swap (adverbs, conjunctions, inflected verbs, prepositions), and awkward English word order is acceptable.
+
 Each item has exactly these fields:
-{"en": "computer", "occurrence": 1, "target": "电脑", "romanization": "diànnǎo", "pos": "noun", "gloss": "computer", "level": 1}
+{"kind": "word", "en": "computer", "occurrence": 1, "target": "电脑", "romanization": "diànnǎo", "pos": "noun", "gloss": "computer", "level": 1}
+{"kind": "phrase", "en": "run the test again", "occurrence": 1, "target": "再运行测试", "romanization": "zài yùnxíng cèshì", "pos": "phrase", "gloss": "run the test again", "level": 3}
 
 - target: the word in the target language (for Mandarin: simplified hanzi).
 - romanization: for Mandarin, pinyin with tone marks; for a language in Latin script, "".
+- kind: "word" or "phrase".
 - pos: noun, verb, adjective, adverb, phrase or idiom.
 - gloss: a short English meaning in this context.
 - level: HSK level 1-6 for Mandarin; for other languages the CEFR step as 1-6 (A1=1 ... C2=6); null if unsure.`
@@ -457,6 +492,8 @@ export function buildPrompt(text: string, s: OsmosisSettings, lists: PromptLists
     `Level: ${level}`,
     `Density: ${DENSITY_RULES[s.density].text}`,
     `Item limit for this block: ${cap}`,
+    `Phrase limit for this block: ${phraseCap(s.level, s.coverage)}`,
+    `Coverage: ${s.coverage === 'maximum' ? 'maximum (any part of speech; awkward English word order is acceptable)' : 'natural (keep English grammar intact)'}`,
     `Known words (avoid): ${lists.known.join(', ') || 'none'}`,
     `Seen often, not saved (review gently): ${lists.review.join(', ') || 'none'}`,
     `Saved words (fine to reuse when natural): ${lists.saved.join(', ') || 'none'}`,
@@ -484,8 +521,20 @@ export function shownText(w: OsmosisWord, show: OsmosisSettings['show']): string
   return w.target
 }
 
+let dayOffsetMin = 0
+
+export function setDayOffset(minutesEastOfUtc: number) {
+  if (Number.isFinite(minutesEastOfUtc) && Math.abs(minutesEastOfUtc) <= 14 * 60) dayOffsetMin = minutesEastOfUtc
+}
+
+export function parseUtcOffset(s: string): number | null {
+  const m = /^([+-])(\d{2})(\d{2})$/.exec(s.trim())
+  if (!m) return null
+  return (m[1] === '-' ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3]))
+}
+
 export function dayOf(ms: number): string {
-  return new Date(ms).toISOString().slice(0, 10)
+  return new Date(ms + dayOffsetMin * 60_000).toISOString().slice(0, 10)
 }
 
 export function cellWidth(s: string): number {
@@ -710,4 +759,43 @@ export function rawFinalsFromHistory(rows: readonly HistoryRow[]): string[] {
   }
   if (last) out.push(last)
   return out
+}
+
+// ---------- the settings table: pane rows, commands and help share it ----------
+
+export type SettingRow = {
+  command: string
+  keyName: string
+  label: string
+  key: keyof OsmosisSettings
+  values: readonly (readonly [string, string, string | boolean])[]
+  help: string
+}
+
+export const SETTING_ROWS: readonly SettingRow[] = [
+  { command: 'on|off', keyName: 'set', label: 'Osmosis', key: 'isOn', values: [['on', 'On', true], ['off', 'Off', false]], help: 'Turn all translation on or off.' },
+  { command: 'level', keyName: 'level', label: 'Level', key: 'level', values: [['beginner', 'Beginner', 'beginner'], ['intermediate', 'Intermediate', 'intermediate'], ['advanced', 'Advanced', 'advanced']], help: 'Which words swap: HSK 1-2, 3-4, or 5-6.' },
+  { command: 'density', keyName: 'density', label: 'Density', key: 'density', values: [['low', 'Low', 'low'], ['normal', 'Normal', 'normal'], ['high', 'High', 'high']], help: 'How many words swap: 1 per 3 sentences, 1, or 2 per sentence.' },
+  { command: 'show', keyName: 'show', label: 'Show', key: 'show', values: [['hanzi', 'Hanzi', 'hanzi'], ['pinyin', 'Pinyin', 'pinyin'], ['both', 'Both', 'both']], help: 'Show swapped words as characters, pinyin, or both.' },
+  { command: 'coverage', keyName: 'coverage', label: 'Coverage', key: 'coverage', values: [['natural', 'Natural', 'natural'], ['maximum', 'Maximum', 'maximum']], help: 'Natural keeps English grammar intact; Maximum swaps more words.' },
+  { command: 'card', keyName: 'card', label: 'Hover card', key: 'card', values: [['word', 'At the word', 'word'], ['bar', 'In the bar', 'bar'], ['both', 'Both', 'both']], help: 'Where the word card appears when you point at a word.' },
+  { command: 'band', keyName: 'bar', label: 'Hover bar', key: 'isBandOn', values: [['on', 'On', true], ['off', 'Off', false]], help: "The line above the prompt with today's count and bar cards." },
+  { command: 'status', keyName: 'status', label: 'Status line', key: 'isStatusOn', values: [['on', 'On', true], ['off', 'Off', false]], help: 'The \u{1F331} entry under the prompt.' },
+  { command: 'copy', keyName: 'copy', label: 'Copy', key: 'copy', values: [['english', 'English', 'english'], ['shown', 'As shown', 'shown']], help: 'English: copied text pastes in English. As shown: pastes as seen.' },
+  { command: 'cap', keyName: 'cap', label: 'Daily cap', key: 'cap', values: [['off', 'Off', 'off'], ['100k', '100k', '100k'], ['300k', '300k', '300k'], ['1m', '1M', '1m']], help: 'Stop translating after this many Haiku tokens a day.' },
+  { command: 'model', keyName: 'model', label: 'Model', key: 'model', values: [['haiku', 'Haiku', 'haiku'], ['local', 'Local', 'local']], help: 'Haiku (default) or a local model on your machine.' },
+]
+
+export function settingsHelp(): string {
+  const lines = ['Osmosis settings (type /osmosis <setting> <value>, or use the pane):']
+  for (const row of SETTING_ROWS) {
+    const values = row.values.map(v => v[0]).join('|')
+    lines.push(`- ${row.command === 'on|off' ? 'on|off' : `${row.command} ${values}`}: ${row.help}`)
+  }
+  lines.push('- endpoint <url>: Address of the local model server (default http://127.0.0.1:8080/v1).')
+  lines.push('- local-model <name>: Model name sent to the local server (Ollama, LM Studio).')
+  lines.push('- lang <name>: Target language; Mandarin is the default and tested one.')
+  lines.push('- debug on|off: Write a trace of keys and counts (no reply text) to a log file.')
+  lines.push('Other: /osmosis (open the pane), /osmosis bank, /osmosis quiz.')
+  return lines.join('\n')
 }

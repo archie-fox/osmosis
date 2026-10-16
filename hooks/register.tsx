@@ -23,6 +23,11 @@ import {
   keyFor,
   langInfo,
   normText,
+  parseUtcOffset,
+  phraseCap,
+  setDayOffset,
+  settingsHelp,
+  SETTING_ROWS,
   parseReply,
   pickVoice,
   planCards,
@@ -31,13 +36,13 @@ import {
   scopeFor,
   swapCap,
 } from './core'
-import type { HistoryRow } from './core'
+import type { HistoryRow, OnScreenRows } from './core'
 import { revertCopy } from './copyback'
 import type { ShownBlock } from './copyback'
 import { EMPTY_DICT, parseCedict, parseHsk, verifyWord } from './dict'
 import type { Dict } from './dict'
 import { drawBand, drawBank, drawHome, drawMessage, drawQuiz } from './draw'
-import type { ExampleView, PaneActions } from './draw'
+import type { Els, ExampleView, PaneActions } from './draw'
 import {
   EMPTY_USAGE,
   EXAMPLE_SCHEMA,
@@ -112,6 +117,11 @@ const CLIP_TOOLS: ClipTool[] = [
 let clipTool: ClipTool | null | undefined
 let lastClipHash: string | null = null
 let isClipBusy = false
+const trace: string[] = []
+let isTraceDirty = false
+let isTraceOn = false
+let tracePath: string | null = null
+const TRACE_LINES = 400
 const CLIP_MS = 400
 const CLIP_BLOCKS = 30
 let isFallbackDirty = false
@@ -192,6 +202,36 @@ async function watchClipboard($: $T) {
     // the clipboard stays as it was
   } finally {
     isClipBusy = false
+  }
+}
+
+function note(line: string) {
+  if (!isTraceOn) return
+  trace.push(`${new Date().toISOString()} ${line}`)
+  if (trace.length > TRACE_LINES) trace.splice(0, trace.length - TRACE_LINES)
+  isTraceDirty = true
+}
+
+async function traceFile($: $T): Promise<string> {
+  if (tracePath) return tracePath
+  const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${(await $.env.get('HOME')) ?? '.'}/.claude`
+  tracePath = `${config}/plugins/data/osmosis/debug.log`
+  return tracePath
+}
+
+async function flushTrace($: $T) {
+  if (!isTraceDirty) return
+  isTraceDirty = false
+  await $.fs.write(await traceFile($), `${trace.join('\n')}\n`)
+}
+
+async function readOffset($: $T) {
+  try {
+    const r = await $.process.run(['date', '+%z'], { timeoutMs: 3000 })
+    const off = r.exitCode === 0 ? parseUtcOffset(r.stdout) : null
+    if (off !== null) setDayOffset(off)
+  } catch {
+    // stay on UTC days
   }
 }
 
@@ -302,6 +342,7 @@ function fromModelUsage(u: ModelUsage | undefined): CallUsage {
 async function recordUsage($: $T, provider: OsmosisProvider, u: CallUsage) {
   const day = dayOf(await $.clock.now())
   await update($, usageAtom, usage => addUsage(usage, day, provider, u))
+  note(`usage ${provider} in=${u.input} out=${u.output} cacheRead=${u.cacheRead} cacheWrite=${u.cacheWrite}`)
   isUsageDirty = true
 }
 
@@ -364,6 +405,21 @@ async function settle($: $T, job: Job, words: OsmosisWord[], isFresh: boolean) {
   remember(job.key, words)
   rememberText(job.key, job.text)
   if (isFresh) isCacheDirty = true
+  await $.state.set({ ...TX, id: job.key }, { status: 'ok', words })
+  note(`settle key=${job.key} words=${words.length} fresh=${isFresh}`)
+  try {
+    await settleExtras($, job, words, isFresh)
+  } catch {
+    note(`settle key=${job.key} extras failed`)
+  }
+  try {
+    $.ui.invalidate('ui.render')
+  } catch {
+    // the state write redraws the readers anyway
+  }
+}
+
+async function settleExtras($: $T, job: Job, words: OsmosisWord[], isFresh: boolean) {
   if (words.length > 0) {
     await update($, recentAtom, list =>
       [...list.filter(r => r.key !== job.key), ...words.map((word, index) => ({ key: job.key, index, word }))].slice(-60),
@@ -388,7 +444,6 @@ async function settle($: $T, job: Job, words: OsmosisWord[], isFresh: boolean) {
       })
     }
   }
-  await $.state.set({ ...TX, id: job.key }, { status: 'ok', words })
 }
 
 async function retryOrFail($: $T, job: Job, reason: string) {
@@ -398,6 +453,7 @@ async function retryOrFail($: $T, job: Job, reason: string) {
     jobs.set(job.requestId, { ...job, updatedAt: 0 })
     return
   }
+  note(`fail key=${job.key} reason=${reason} attempt=${n}`)
   await $.state.set({ ...TX, id: job.key }, { status: 'failed', reason })
 }
 
@@ -411,12 +467,19 @@ async function translate($: $T, job: Job) {
     const prompt = buildPrompt(job.text, job.settings, reviewLists(progress), cap)
     const r =
       job.settings.model === 'local'
-        ? await callLocal($, job.settings, RULES, prompt, wordsSchema(cap), 3000)
-        : await callHaiku($, prompt, true, 3000)
+        ? await callLocal($, job.settings, RULES, prompt, wordsSchema(cap), Math.min(3000, 300 + cap * 120))
+        : await callHaiku($, prompt, true, Math.min(3000, 300 + cap * 120))
     if (!r.ok) return await retryOrFail($, job, r.reason)
     const isMandarin = langInfo(job.settings.lang).isMandarin
-    const parsed = parseReply(r.text, job.text, { isMandarin, known: new Set(Object.keys(progress.known)), cap })
+    const parsed = parseReply(r.text, job.text, {
+      isMandarin,
+      known: new Set(Object.keys(progress.known)),
+      cap,
+      maxPhrases: phraseCap(job.settings.level, job.settings.coverage),
+      coverage: job.settings.coverage,
+    })
     if (!parsed.ok) return await retryOrFail($, job, parsed.reason)
+    note(`translate key=${job.key} cap=${cap} kept=${parsed.words.length} replyChars=${r.text.length}`)
     const d = isMandarin ? await ensureDict($) : EMPTY_DICT
     await settle($, job, isMandarin ? parsed.words.map(w => verifyWord(w, d)) : parsed.words, true)
   } catch {
@@ -494,6 +557,7 @@ async function tickOnce($: $T) {
     await update($, fallbacksAtom, () => all)
   }
   if (ticks % 12 === 0) await flush($)
+  if (ticks % 5 === 0) await flushTrace($).catch(() => undefined)
 }
 
 function noteFallbacks(msgKey: string, scopes: string[]) {
@@ -642,7 +706,37 @@ function actions($: $T, key: string | null, words: readonly OsmosisWord[], examp
   }
 }
 
-const CAPS = { off: 'off', '100k': '100k', '300k': '300k', '1m': '1m' } as const
+type ReplyView = { columns: number; onScreen: OnScreenRows; isFirst: boolean }
+
+function drawReply(
+  $: $T,
+  els: Els,
+  view: ReplyView,
+  text: string,
+  words: OsmosisWord[],
+  key: string,
+  s: OsmosisSettings,
+  status: string,
+) {
+  const segs = planMessage(text, words)
+  if (!segs.some(seg => seg.kind === 'prose')) {
+    note(`${status} swaps=0 (no prose block)`)
+    return null
+  }
+  const pick = (index: number) =>
+    void (async () => {
+      await update($, selectedAtom, () => ({ key, index }))
+      await update($, viewAtom, () => 'home' as const)
+      await openPane($)
+    })()
+  const cards = s.card === 'bar' ? null : planCards(segs, words, s.show, view.columns, view.onScreen)
+  if (cards) noteFallbacks(key, [...cards.entries()].filter(([, p]) => p.kind === 'bar').map(([i]) => scopeFor(key, i)))
+  const swaps = segs.reduce((n, seg) => n + (seg.kind === 'prose' ? seg.lines.reduce((m, l) => m + l.tokens.filter(t => t.kind === 'swap').length, 0) : 0), 0)
+  const floating = cards ? [...cards.values()].filter(p => p.kind !== 'bar').length : 0
+  note(`${status} swaps=${swaps} cards=${floating} bar=${cards ? cards.size - floating : 0}`)
+  return drawMessage(els, segs, words, key, view.isFirst, s, pick, cards)
+}
+
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -660,13 +754,16 @@ export const register: Register = on => {
       await $.command.register({
         name: 'osmosis',
         description: 'Osmosis Chinese practice: open the word pane, or change settings',
-        argumentHint: '[on|off|level|density|show|card|band|status|cap|copy|model|endpoint|bank|quiz|lang|help]',
+        argumentHint: '[help|on|off|level|density|show|coverage|card|band|status|copy|cap|model|endpoint|bank|quiz|lang]',
         immediate: true,
       })
     } catch {
       // commands unavailable here
     }
-    applyStatus($, await read($, settingsAtom))
+    await readOffset($)
+    const started = await read($, settingsAtom)
+    isTraceOn = started.debug
+    applyStatus($, started)
     $.clock.every(TICK_MS, () => void tick($).catch(() => undefined))
     $.clock.every(CLIP_MS, () => void watchClipboard($))
     void detectVoice($)
@@ -714,9 +811,9 @@ export const register: Register = on => {
     if (!s.isOn) return next(e)
     const key = keyFor(text, s)
     const { value: tx } = await $.state.get({ ...TX, id: key })
-    if (tx?.status === 'failed') return next(e)
-    const hit = tx === undefined ? cache.get(key) : undefined
+    const hit = tx?.status === 'ok' ? undefined : cache.get(key)
     const isFinal = isFinalBlock(text, await read($, finalsAtom))
+    let queued = false
     if (
       tx === undefined &&
       (isFinal || hit !== undefined) &&
@@ -725,22 +822,23 @@ export const register: Register = on => {
       jobs.get(e.requestId)?.key !== key
     ) {
       jobs.set(e.requestId, { requestId: e.requestId, key, text, settings: s, updatedAt: await $.clock.now() })
+      queued = true
     }
     const words = tx?.status === 'ok' ? tx.words : hit
-    if (!words || words.length === 0) return next(e)
+    const status = `render key=${key} tx=${tx?.status ?? 'none'} hit=${hit ? 'yes' : 'no'} final=${isFinal ? 'yes' : 'no'} queued=${queued ? 'yes' : 'no'}`
+    if (!words || words.length === 0) {
+      note(status)
+      return next(e)
+    }
     rememberText(key, text)
-    const segs = planMessage(text, words)
-    if (!segs.some(seg => seg.kind === 'prose')) return next(e)
-    const { Box, Text, Button, Markdown } = $.ui.resolve(e)
-    const pick = (index: number) =>
-      void (async () => {
-        await update($, selectedAtom, () => ({ key, index }))
-        await update($, viewAtom, () => 'home' as const)
-        await openPane($)
-      })()
-    const cards = s.card === 'bar' ? null : planCards(segs, words, s.show, e.viewport?.columns ?? 100, e.props.onScreen)
-    if (cards) noteFallbacks(key, [...cards.entries()].filter(([, p]) => p.kind === 'bar').map(([i]) => scopeFor(key, i)))
-    return drawMessage({ Box, Text, Button, Markdown }, segs, words, key, e.props.isFirstOfReply, s, pick, cards)
+    try {
+      const { Box, Text, Button, Markdown } = $.ui.resolve(e)
+      const view = { columns: e.viewport?.columns ?? 100, onScreen: e.props.onScreen, isFirst: e.props.isFirstOfReply }
+      return drawReply($, { Box, Text, Button, Markdown }, view, text, words, key, s, status) ?? next(e)
+    } catch (err) {
+      note(`${status} error=${err instanceof Error ? err.name : 'unknown'}`)
+      return next(e)
+    }
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -789,8 +887,6 @@ export const register: Register = on => {
     const [verb = '', ...rest] = e.args.trim().split(/\s+/).filter(Boolean)
     const arg = (rest[0] ?? '').toLowerCase()
     const v = verb.toLowerCase()
-    const usage =
-      'Osmosis: /osmosis (open pane) · on|off · level beginner|intermediate|advanced · density low|normal|high · show hanzi|pinyin|both · card word|bar|both · band on|off · status on|off · cap off|100k|300k|1m · copy english|shown · model haiku|local · endpoint <url> · local-model <name> · bank · quiz · lang <name>'
     try {
       if (v === '') {
         await update($, viewAtom, () => 'home' as const)
@@ -799,42 +895,15 @@ export const register: Register = on => {
         const s = await read($, settingsAtom)
         return { text: `Osmosis pane opened (${s.isOn ? 'on' : 'off'}, ${s.level}, ${s.density} density).` }
       }
-      if (v === 'on' || v === 'off') {
-        await changeSettings($, { isOn: v === 'on' })
-        return { text: `Osmosis is ${v}.` }
-      }
-      if (v === 'level' && (arg === 'beginner' || arg === 'intermediate' || arg === 'advanced')) {
-        await changeSettings($, { level: arg })
-        return { text: `Osmosis level: ${arg}.` }
-      }
-      if (v === 'density' && (arg === 'low' || arg === 'normal' || arg === 'high')) {
-        await changeSettings($, { density: arg })
-        return { text: `Osmosis density: ${arg}.` }
-      }
-      if (v === 'show' && (arg === 'hanzi' || arg === 'pinyin' || arg === 'both')) {
-        await changeSettings($, { show: arg })
-        return { text: `Osmosis shows ${arg === 'both' ? 'hanzi + pinyin' : arg}.` }
-      }
-      if (v === 'card' && (arg === 'word' || arg === 'bar' || arg === 'both')) {
-        await changeSettings($, { card: arg })
-        return { text: `Osmosis hover card: ${arg === 'word' ? 'at the word' : arg === 'bar' ? 'in the bar' : 'both'}.` }
-      }
-      if (v === 'status' && (arg === 'on' || arg === 'off')) {
-        await changeSettings($, { isStatusOn: arg === 'on' })
-        return { text: `Osmosis status line ${arg}.` }
-      }
-      if (v === 'band' && (arg === 'on' || arg === 'off')) {
-        await changeSettings($, { isBandOn: arg === 'on' })
-        return { text: `Osmosis hover band ${arg}.` }
-      }
-      if (v === 'cap' && arg in CAPS) {
-        const cap = CAPS[arg as keyof typeof CAPS]
-        await changeSettings($, { cap })
-        return { text: `Osmosis daily cap: ${cap === 'off' ? 'off' : `${cap} Haiku tokens`}.` }
-      }
-      if (v === 'model' && (arg === 'haiku' || arg === 'local')) {
-        const s = await changeSettings($, { model: arg })
-        return { text: arg === 'haiku' ? 'Osmosis model: Claude Haiku.' : `Osmosis model: local, at ${s.endpoint}.` }
+      if (v === 'help') return { text: settingsHelp() }
+      const isToggle = v === 'on' || v === 'off'
+      const row = SETTING_ROWS.find(r => (isToggle ? r.command === 'on|off' : r.command === v))
+      const choice = row?.values.find(x => x[0] === (isToggle ? v : arg))
+      if (row && choice) {
+        const s = await changeSettings($, { [row.key]: choice[2] } as Partial<OsmosisSettings>)
+        const extra = row.key === 'model' && s.model === 'local' ? ` Endpoint: ${s.endpoint}.` : ''
+        const name = row.key === 'isOn' ? 'Osmosis' : `Osmosis ${row.label.toLowerCase()}`
+        return { text: `${name}: ${choice[1]}. ${row.help}${extra}` }
       }
       if (v === 'endpoint' && rest[0] && isLocalUrl(rest[0])) {
         await changeSettings($, { endpoint: rest[0].slice(0, 200) })
@@ -849,9 +918,12 @@ export const register: Register = on => {
         await changeSettings($, { lang })
         return { text: `Osmosis language: ${langInfo(lang).name}.` }
       }
-      if (v === 'copy' && (arg === 'english' || arg === 'shown')) {
-        await changeSettings($, { copy: arg })
-        return { text: arg === 'english' ? 'Osmosis copies swapped words as English.' : 'Osmosis copies text as shown.' }
+      if (v === 'debug' && (arg === 'on' || arg === 'off')) {
+        await changeSettings($, { debug: arg === 'on' })
+        if (arg === 'off') await flushTrace($).catch(() => undefined)
+        isTraceOn = arg === 'on'
+        note('debug trace on')
+        return { text: arg === 'on' ? `Osmosis debug trace on: ${await traceFile($)} (keys and counts only, no reply text).` : 'Osmosis debug trace off.' }
       }
       if (v === 'bank') {
         await update($, viewAtom, () => 'bank' as const)
@@ -864,7 +936,7 @@ export const register: Register = on => {
         await openPane($)
         return { text: 'Osmosis quiz opened.' }
       }
-      return { text: usage }
+      return { text: settingsHelp() }
     } catch {
       return { text: 'Osmosis: that did not work. Try /osmosis help.' }
     }

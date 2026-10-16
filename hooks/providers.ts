@@ -105,6 +105,7 @@ export function parseExample(reply: string): ExampleReply | null {
 const WORD_ITEM = {
   type: 'object',
   properties: {
+    kind: { type: 'string', enum: ['word', 'phrase'] },
     en: { type: 'string' },
     occurrence: { type: 'integer', minimum: 1 },
     target: { type: 'string' },
@@ -113,7 +114,7 @@ const WORD_ITEM = {
     gloss: { type: 'string' },
     level: { type: ['integer', 'null'], minimum: 1, maximum: 6 },
   },
-  required: ['en', 'occurrence', 'target', 'romanization', 'pos', 'gloss', 'level'],
+  required: ['kind', 'en', 'occurrence', 'target', 'romanization', 'pos', 'gloss', 'level'],
   additionalProperties: false,
 }
 

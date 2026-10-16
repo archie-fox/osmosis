@@ -46,18 +46,19 @@ Each word is checked against the CC-CEDICT dictionary. The dictionary sets the p
 
 ## Settings
 
-Type `/osmosis` to open the pane. Its Settings section has a button for each choice, so you do not need to type anything:
+Type `/osmosis` to open the pane. Its Settings section has a button for each choice, so you do not need to type anything. Under each row, a short line says what the setting does. `/osmosis help` lists the same settings and lines.
 
-- **Osmosis**: On or Off. Press `o` to switch.
-- **Level**: Beginner (HSK 1-2), Intermediate (HSK 3-4), or Advanced (HSK 5-6, with idioms).
-- **Density**: Low (about 1 word in 3 sentences), Normal (about 1 per sentence), or High (about 2 per sentence).
-- **Show**: Hanzi (characters), Pinyin, or Both.
-- **Hover card**: At the word (the default: the card shows above or below the word you point at), In the bar (a one-line card in the bar above the prompt), or Both. When there is no room next to a word, its card shows in the bar instead.
-- **Hover bar**: On or Off. Press `v` to switch. Off hides the bar above the prompt, and its card too.
-- **Copy**: English (the default) or As shown. With English, text you select and copy from a reply pastes with the swapped words back in English.
-- **Status line**: On or Off. Off hides the `🌱 中文 · <level>` entry under the prompt.
-- **Daily cap**: Off, 100k, 300k (the default), or 1M Haiku tokens per day. At the cap, Osmosis starts no new translations until the next day, replies stay in English, and the bar says "daily cap reached". The cap counts Haiku tokens only.
-- **Model**: Haiku (the default) or Local. See "Run it on a local model".
+- **Osmosis** (On, Off): Turn all translation on or off. Press `o` to switch.
+- **Level** (Beginner, Intermediate, Advanced): Which words swap: HSK 1-2, 3-4, or 5-6. Intermediate also swaps up to 1 short phrase per block, Advanced up to 2 (with idioms).
+- **Density** (Low, Normal, High): How many words swap: about 1 per 3 sentences, 1, or 2 per sentence.
+- **Show** (Hanzi, Pinyin, Both): Show swapped words as characters, pinyin, or both.
+- **Coverage** (Natural, Maximum): Natural keeps English grammar intact; Maximum swaps more words. Natural swaps nouns, adjectives and base-form verbs, plus a linking word that opens a sentence. Maximum gives more swaps, some read awkwardly in English word order, and allows a phrase at every level.
+- **Hover card** (At the word, In the bar, Both): Where the word card appears when you point at a word. With At the word, a word with no room next to it shows its card in the bar instead.
+- **Hover bar** (On, Off): The line above the prompt with today's count and bar cards. Press `v` to switch.
+- **Status line** (On, Off): The `🌱 中文 · <level>` entry under the prompt.
+- **Copy** (English, As shown): English: copied text pastes in English. As shown: pastes as seen.
+- **Daily cap** (Off, 100k, 300k, 1M): Stop translating after this many Haiku tokens a day. The default is 300k. At the cap, replies stay in English and the bar says "daily cap reached". Local model tokens do not count.
+- **Model** (Haiku, Local): Haiku (default) or a local model on your machine. See "Run it on a local model".
 - **Word bank** (`w`) and **Quiz** (`q`) open those views.
 
 The pane also shows the token count, for example `Today: 42 calls · 96k tokens (71k in / 25k out) · 7 days: 410k`. Local model tokens show on a separate line.
@@ -71,10 +72,12 @@ The same settings also work as typed commands:
 | Command | What it does |
 |---|---|
 | `/osmosis` | Opens the pane with the words of the latest reply and the settings. |
+| `/osmosis help` | Lists every setting with its values and what it does. |
 | `/osmosis on` / `/osmosis off` | Turns Osmosis on or off. Off shows all replies in plain English. |
 | `/osmosis level beginner` | Sets the level: `beginner`, `intermediate`, or `advanced`. |
 | `/osmosis density normal` | Sets the density: `low`, `normal`, or `high`. |
 | `/osmosis show hanzi` | Sets how a word shows: `hanzi`, `pinyin`, or `both`. |
+| `/osmosis coverage natural` | Sets the coverage: `natural` keeps English grammar intact; `maximum` gives more swaps, some read awkwardly in English word order. |
 | `/osmosis card word` | Sets where the hover card shows: `word` (next to the word), `bar` (in the bar above the prompt), or `both`. |
 | `/osmosis band on` / `/osmosis band off` | Shows or hides the hover bar above the prompt. |
 | `/osmosis status on` / `/osmosis status off` | Shows or hides the Osmosis entry in the status line. |
@@ -83,6 +86,7 @@ The same settings also work as typed commands:
 | `/osmosis model haiku` | Sets the model: `haiku` or `local`. |
 | `/osmosis endpoint <url>` | Sets the local server address. The default is `http://127.0.0.1:8080/v1`. |
 | `/osmosis local-model <name>` | Sets the model name sent to the local server. Ollama and LM Studio need it. |
+| `/osmosis debug on` / `/osmosis debug off` | Writes a short trace (keys and counts, never reply text) to `~/.claude/plugins/data/osmosis/debug.log`, to help find a problem. |
 | `/osmosis bank` | Opens your word bank. Each word has "say" and "unsave" buttons. |
 | `/osmosis quiz` | Starts a 5-question quiz from your saved and recent words. Press `1`-`4` to answer. A word you get right 3 times becomes "known". |
 | `/osmosis lang <name>` | Sets the language. Mandarin is the default and the tested language. |

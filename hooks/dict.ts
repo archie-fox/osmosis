@@ -65,7 +65,51 @@ export function literalFor(target: string, dict: Dict, fallback: string): string
   return parts.join(' + ')
 }
 
+const HAN = /[\u3400-\u9fff\uf900-\ufaff]/
+
+export function segment(target: string, dict: Dict, maxLen = 8): string[] {
+  const chars = [...target].filter(ch => HAN.test(ch))
+  const out: string[] = []
+  let i = 0
+  while (i < chars.length) {
+    let len = Math.min(maxLen, chars.length - i)
+    while (len > 1 && !dict.words.has(chars.slice(i, i + len).join(''))) len--
+    out.push(chars.slice(i, i + len).join(''))
+    i += len
+  }
+  return out
+}
+
+function pieceReading(list: readonly Reading[], hint: string): Reading {
+  const h = toneless(hint)
+  const inHint = list.filter(r => h.includes(toneless(r.reading)))
+  if (inHint.length) {
+    const exact = inHint.find(r => norm(hint).includes(norm(r.reading)))
+    return exact ?? inHint[0]!
+  }
+  return list.find(r => r.reading === r.reading.toLowerCase()) ?? list[0]!
+}
+
+const shortWord = (g: string) => g.replace(/^to /, '').replace(/\s*\(.*?\)\s*/g, ' ').trim()
+
+export function verifyPhrase(w: OsmosisWord, dict: Dict): OsmosisWord {
+  const pieces = segment(w.target, dict)
+  if (pieces.length === 0) return { ...w, verified: false }
+  const found = pieces.map(p => dict.words.get(p))
+  if (found.some(f => !f || f.length === 0)) return { ...w, verified: false }
+  const readings = found.map(list => pieceReading(list!, w.romanization))
+  const levels = pieces.map(p => dict.hsk.get(p))
+  return {
+    ...w,
+    romanization: readings.map(r => r.reading).join(' '),
+    literal: pieces.map((p, i) => `${p} ${shortWord(readings[i]!.gloss) || '?'}`).join(' + '),
+    level: levels.every(l => l !== undefined) ? Math.max(...(levels as number[])) : null,
+    verified: true,
+  }
+}
+
 export function verifyWord(w: OsmosisWord, dict: Dict): OsmosisWord {
+  if (w.kind === 'phrase') return verifyPhrase(w, dict)
   const list = dict.words.get(w.target)
   const literal = literalFor(w.target, dict, w.literal)
   if (!list || list.length === 0) return { ...w, literal, verified: false }
