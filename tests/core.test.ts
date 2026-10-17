@@ -499,3 +499,15 @@ describe('markdown row estimate', () => {
     expect(mdRows('| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n\nafter', 80)).toBe(9)
   })
 })
+
+import { cardRows, wrapCells } from '../hooks/core'
+
+describe('card wrapping', () => {
+  test('long lines wrap at spaces with an indent instead of being cut', () => {
+    expect(wrapCells('最近的终端更新  zuìjìn de zhōngduān gēngxīn', 35)).toEqual(['最近的终端更新  zuìjìn de zhōngduān', '  gēngxīn'])
+    expect(wrapCells('short', 10)).toEqual(['short'])
+    expect(wrapCells('aaaaaaaaaaaaaaa', 10)).toEqual(['aaaaaaaaa\u2026'])
+    const rows = cardRows(['最近的终端更新  zuìjìn de zhōngduān gēngxīn', 'phrase · recent terminal update'], 36)
+    expect(rows.map(r => r.line)).toEqual([0, 0, 1])
+  })
+})

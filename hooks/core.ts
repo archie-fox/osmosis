@@ -707,6 +707,28 @@ export function cardLines(w: OsmosisWord): string[] {
   ].filter(Boolean)
 }
 
+// Wraps at spaces; a continuation row is indented, and one word too wide is cut.
+export function wrapCells(s: string, cells: number, indent = 2): string[] {
+  const rows: string[] = []
+  let cur = ''
+  for (const word of s.split(' ')) {
+    const next = cur ? `${cur} ${word}` : word
+    if (cellWidth(next) <= cells || !cur.trim()) cur = next
+    else {
+      rows.push(cur)
+      cur = ' '.repeat(indent) + word
+    }
+  }
+  rows.push(cur)
+  return rows.map(r => fitCells(r, cells, 'cut'))
+}
+
+export type CardRow = { text: string; line: number }
+
+export function cardRows(lines: readonly string[], inner: number): CardRow[] {
+  return lines.flatMap((l, line) => wrapCells(l, line === 0 ? inner - SPEAKER_CELLS : inner).map(text => ({ text, line })))
+}
+
 export type CardPlace =
   | { kind: 'above' | 'below'; top: number; left: number; inner: number; height: number }
   | { kind: 'bar' }
@@ -726,7 +748,7 @@ export function placeCard(
   const widest = Math.max(...lines.map((l, i) => cellWidth(l) + (i === 0 ? SPEAKER_CELLS : 0)))
   const inner = Math.max(4, Math.min(widest, CARD_MAX - 4, columns - GUTTER - 4))
   const width = inner + 4
-  const height = lines.length + 2
+  const height = cardRows(lines, inner).length + 2
   const left = Math.max(0, Math.min(GUTTER + spot.lineLeft + spot.x, columns - width))
   const site = (row: number) => row + 1
   const aboveTop = spot.row - height

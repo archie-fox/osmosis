@@ -16,7 +16,7 @@ import type {
   OsmosisUsage,
   OsmosisWord,
 } from '../types'
-import { SETTING_ROWS, SPEAKER, cardLines, cellWidth, fitCells, langInfo, padCells, scopeFor, shownText } from './core'
+import { SETTING_ROWS, SPEAKER, cardLines, cardRows, cellWidth, fitCells, langInfo, padCells, scopeFor, shownText } from './core'
 import { usageLines } from './providers'
 import type { CardPlace, Part, Segment, Token } from './core'
 
@@ -53,6 +53,7 @@ function drawWord(els: Els, w: OsmosisWord, scope: string, s: OsmosisSettings, k
 
 function drawCard({ Box, Text, Button }: Els, w: OsmosisWord, scope: string, p: Extract<CardPlace, { kind: 'above' | 'below' }>, say: () => void) {
   const lines = cardLines(w)
+  const rows = cardRows(lines, p.inner)
   const head = cellWidth(w.target)
   return (
     <Box
@@ -67,19 +68,19 @@ function drawCard({ Box, Text, Button }: Els, w: OsmosisWord, scope: string, p: 
       width={p.inner + 4}
       flexShrink={0}
     >
-      {lines.map((line, i) =>
+      {rows.map((row, i) =>
         i === 0 ? (
           <Box flexDirection="row">
             <Text>
               {' '}
               <Text bold color={LEARN_COLOR}>{w.target}</Text>
-              {`${padCells(line.slice(w.target.length), Math.max(0, p.inner - head - 2))}`}
+              {`${padCells(row.text.slice(w.target.length), Math.max(0, p.inner - head - 2))}`}
             </Text>
             <Button key={`say-${scope}`} label={SPEAKER} plain onPress={say}>{SPEAKER}</Button>
             <Text> </Text>
           </Box>
         ) : (
-          <Text dimColor={i === lines.length - 1}>{` ${padCells(line, p.inner)} `}</Text>
+          <Text dimColor={row.line === lines.length - 1}>{` ${padCells(row.text, p.inner)} `}</Text>
         ),
       )}
     </Box>
