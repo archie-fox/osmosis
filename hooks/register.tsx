@@ -930,9 +930,9 @@ export const register: Register = on => {
     else visible.add(key)
     if (visible.size + Number(isUnreported) !== was) await syncClip($)
     try {
-      const { Box, Text, Button, Markdown } = $.ui.resolve(e)
+      const { Box, Text, Button, Markdown, Link } = $.ui.resolve(e)
       const view = { columns: e.viewport?.columns ?? 100, onScreen: e.props.onScreen, isFirst: e.props.isFirstOfReply }
-      return drawReply($, { Box, Text, Button, Markdown }, view, text, words, key, s, status) ?? next(e)
+      return drawReply($, { Box, Text, Button, Markdown, Link }, view, text, words, key, s, status) ?? next(e)
     } catch (err) {
       note(`${status} error=${err instanceof Error ? err.name : 'unknown'}`)
       return next(e)
@@ -953,12 +953,12 @@ export const register: Register = on => {
       : s.model === 'local' && health.local === 'down'
         ? 'local model unreachable'
         : ''
-    const { Box, Text, Button, Markdown } = $.ui.resolve(e)
-    return drawBand({ Box, Text, Button, Markdown }, recent, s, count, e.props.bodyColumns, notice, await read($, fallbacksAtom))
+    const { Box, Text, Button, Markdown, Link } = $.ui.resolve(e)
+    return drawBand({ Box, Text, Button, Markdown, Link }, recent, s, count, e.props.bodyColumns, notice, await read($, fallbacksAtom))
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const els = (({ Box, Text, Button, Markdown }) => ({ Box, Text, Button, Markdown }))($.ui.resolve(e))
+    const els = (({ Box, Text, Button, Markdown, Link }) => ({ Box, Text, Button, Markdown, Link }))($.ui.resolve(e))
     const s = await read($, settingsAtom)
     const view = await read($, viewAtom)
     note(`pane surface=${e.surface} placement=${e.props.placement} focused=${e.props.isFocused}`)

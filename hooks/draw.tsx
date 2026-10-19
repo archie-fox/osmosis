@@ -2,6 +2,7 @@ import type {
   BoxProps,
   ButtonProps,
   ElementConstructor,
+  LinkProps,
   MarkdownProps,
   RenderElement,
   TextProps,
@@ -27,16 +28,22 @@ export type Els = {
   Text: ElementConstructor<TextProps>
   Button: ElementConstructor<ButtonProps>
   Markdown: ElementConstructor<MarkdownProps>
+  Link: ElementConstructor<LinkProps>
 }
 
 export const LEARN_COLOR = 'suggestion'
 const BULLET = '⏺'
 
-function drawPart({ Text }: Els, p: Part) {
+function drawPart({ Text, Link }: Els, p: Part) {
   if (p.kind === 'bold') return <Text bold>{p.text}</Text>
   if (p.kind === 'italic') return <Text italic>{p.text}</Text>
   if (p.kind === 'code') return <Text color="permission">{p.text}</Text>
-  if (p.kind === 'link' || p.kind === 'url') return <Text color="suggestion" underline>{p.text}</Text>
+  if (p.kind === 'link' || p.kind === 'url')
+    return (
+      <Link href={p.href ?? p.text}>
+        <Text color="suggestion" underline>{p.text}</Text>
+      </Link>
+    )
   return p.text
 }
 

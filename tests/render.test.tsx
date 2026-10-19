@@ -162,6 +162,18 @@ const BAND = {
   props: { hasSurvey: false, isWorking: false, maxRows: 6, bodyColumns: 100, scroll: SCROLL, view: {} },
 } as const
 
+test('a translated reply keeps markdown links and bare URLs clickable', async ($, on) => {
+  const text = TEXT.replace('read the file', 'read [the file](https://example.com/report)').replace('pushed it.', 'pushed it to https://example.com/raw now.')
+  const { clock } = world(on, REPLY, {}, { history: [text] })
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ plugin: 'osmosis', surface: 'terminal', component: 'AssistantMessage', props: { text, isFirstOfReply: true } })
+  await clock.advance(2000)
+  await clock.settle()
+  expect((await ui.find({ key: 'w-0' }))?.text).toContain('电脑')
+  const links = walk(await ui.drawn(), n => n.type === 'Link').map(n => n.props?.href)
+  expect([...new Set(links)]).toEqual(['https://example.com/report', 'https://example.com/raw'])
+})
+
 test('the band holds a hidden card under the same hover scope', async ($, on) => {
   const { clock } = world(on, REPLY)
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
