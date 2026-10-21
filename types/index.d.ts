@@ -91,6 +91,7 @@ export type OsmosisProgress = {
   saved: Record<string, OsmosisWord>
   mastery: Record<string, number>
   today: { date: string; count: number }
+  exported: Record<string, string>
 }
 
 declare module 'claude-code' {

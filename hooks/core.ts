@@ -33,6 +33,7 @@ export const EMPTY_PROGRESS: OsmosisProgress = {
   saved: {},
   mastery: {},
   today: { date: '', count: 0 },
+  exported: {},
 }
 
 export function hashText(text: string): string {
@@ -845,6 +846,69 @@ export function settingsHelp(): string {
   lines.push('- local-model <name>: Model name sent to the local server (Ollama, LM Studio).')
   lines.push('- lang <name>: Target language; Mandarin is the default and tested one.')
   lines.push('- debug on|off: Write a trace of keys and counts (no reply text) to a log file.')
+  lines.push('- export [all]: Save new saved words (or all) as an Anki deck in Downloads.')
   lines.push('Other: /osmosis (open the pane), /osmosis close, /osmosis bank, /osmosis quiz.')
   return lines.join('\n')
+}
+
+// ---------- Anki export ----------
+
+export type AnkiNote = { hanzi: string; pinyin: string; meaning: string; example: string; exampleEn: string; audio: string; exampleAudio: string }
+
+const TONE_MARKS = ['āēīōūǖ', 'áéíóúǘ', 'ǎěǐǒǔǚ', 'àèìòùǜ']
+const VOWELS = `aeiouüv${TONE_MARKS.join('')}`
+const SYLLABLE = new RegExp(`(?:[zcs]h|[bpmfdtnlgkhjqxrzcsyw])?[${VOWELS}]+(?:ng|n|r)?(?![${VOWELS}])`, 'iy')
+
+const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+function toneOf(syllable: string): number {
+  const at = TONE_MARKS.findIndex(marks => [...syllable.toLowerCase()].some(ch => marks.includes(ch)))
+  return at === -1 ? 5 : at + 1
+}
+
+// Wraps each pinyin syllable in a tone span (t1-t5); pinyin it cannot split stays plain.
+export function toneSpans(pinyin: string): string {
+  const text = pinyin.normalize('NFC')
+  const out: string[] = []
+  for (let i = 0; i < text.length; ) {
+    SYLLABLE.lastIndex = i
+    const m = SYLLABLE.exec(text)
+    if (m) {
+      out.push(`<span class="t${toneOf(m[0])}">${m[0]}</span>`)
+      i += m[0].length
+    } else if (/\p{L}/u.test(text[i]!)) {
+      return escapeHtml(text)
+    } else {
+      out.push(escapeHtml(text[i]!))
+      i++
+    }
+  }
+  return out.join('')
+}
+
+// Mandarin only: the cards use Chinese voices and tone colors, and a bank can hold other languages.
+export function exportWords(progress: OsmosisProgress, isAll: boolean): OsmosisWord[] {
+  return Object.values(progress.saved).filter(w => CJK.test(w.target) && (isAll || !progress.exported[w.target]))
+}
+
+export function ankiNotes(words: readonly OsmosisWord[]): AnkiNote[] {
+  return words.map(w => ({
+    hanzi: escapeHtml(w.target),
+    pinyin: toneSpans(w.romanization),
+    meaning: escapeHtml(w.gloss),
+    example: escapeHtml(w.exampleTarget),
+    exampleEn: escapeHtml(w.exampleEn),
+    audio: audioName(w.target),
+    exampleAudio: audioName(w.exampleTarget),
+  }))
+}
+
+// Named by the text, so a re-export reuses the mp3 and Anki keeps one copy.
+export function audioName(text: string): string {
+  return text ? `osmosis-${hashText(text)}.mp3` : ''
+}
+
+export function ttsClips(words: readonly OsmosisWord[]): { text: string; name: string }[] {
+  const texts = new Set(words.flatMap(w => [w.target, w.exampleTarget]).filter(Boolean))
+  return [...texts].map(text => ({ text, name: audioName(text) }))
 }

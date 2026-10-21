@@ -511,3 +511,55 @@ describe('card wrapping', () => {
     expect(rows.map(r => r.line)).toEqual([0, 0, 1])
   })
 })
+
+import { ankiNotes, audioName, exportWords, toneSpans, ttsClips, EMPTY_PROGRESS } from '../hooks/core'
+import type { OsmosisWord } from '../types'
+
+const saved = (target: string, romanization: string, gloss: string): OsmosisWord => ({
+  en: gloss, occurrence: 1, target, romanization, pos: 'noun', gloss, literal: '',
+  exampleTarget: '', exampleRomanization: '', exampleEn: '', level: 1, start: 0, end: 0,
+})
+
+describe('anki export', () => {
+  test('pinyin syllables get one span per tone, with or without spaces', () => {
+    expect(toneSpans('diànnǎo')).toBe('<span class="t4">diàn</span><span class="t3">nǎo</span>')
+    expect(toneSpans('xīngān')).toBe('<span class="t1">xīn</span><span class="t1">gān</span>')
+    expect(toneSpans('Nǐ hǎo ma?')).toBe('<span class="t3">Nǐ</span> <span class="t3">hǎo</span> <span class="t5">ma</span>?')
+  })
+
+  test('pinyin that will not split stays plain and escaped', () => {
+    expect(toneSpans('<b>ok</b>')).toBe('&lt;b&gt;ok&lt;/b&gt;')
+  })
+
+  test('only words not yet exported are picked, unless all are asked for', () => {
+    const progress = { ...EMPTY_PROGRESS, saved: { 窗口: saved('窗口', 'chuāngkǒu', 'window'), 表格: saved('表格', 'biǎogé', 'table') }, exported: { 窗口: '2026-01-01' } }
+    expect(exportWords(progress, false).map(w => w.target)).toEqual(['表格'])
+    expect(exportWords(progress, true).map(w => w.target)).toEqual(['窗口', '表格'])
+  })
+
+  test('words in other languages are not exported', () => {
+    const progress = { ...EMPTY_PROGRESS, saved: { ventana: saved('ventana', '', 'window'), 表格: saved('表格', 'biǎogé', 'table') } }
+    expect(exportWords(progress, true).map(w => w.target)).toEqual(['表格'])
+  })
+
+  test('notes carry the card fields only, HTML-escaped', () => {
+    const w = { ...saved('表格', 'biǎogé', 'table <grid>'), exampleTarget: '这个表格很长。', exampleEn: 'This table is long.' }
+    expect(ankiNotes([w])).toEqual([{
+      hanzi: '表格',
+      pinyin: '<span class="t3">biǎo</span><span class="t2">gé</span>',
+      meaning: 'table &lt;grid&gt;',
+      example: '这个表格很长。',
+      exampleEn: 'This table is long.',
+      audio: audioName('表格'),
+      exampleAudio: audioName('这个表格很长。'),
+    }])
+  })
+
+  test('audio files are named by their text, and each text is voiced once', () => {
+    expect(audioName('表格')).toMatch(/^osmosis-[0-9a-f]{16}\.mp3$/)
+    expect(audioName('表格')).toBe(audioName('表格'))
+    expect(audioName('')).toBe('')
+    const words = [{ ...saved('表格', 'biǎogé', 'table'), exampleTarget: '表格很长。' }, saved('表格', 'biǎogé', 'table')]
+    expect(ttsClips(words)).toEqual([{ text: '表格', name: audioName('表格') }, { text: '表格很长。', name: audioName('表格很长。') }])
+  })
+})

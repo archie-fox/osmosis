@@ -224,6 +224,7 @@ export type PaneActions = {
   setSettings: (patch: Partial<OsmosisSettings>) => void
   openView: (view: 'bank' | 'quiz') => void
   toggleHelp: (row: string) => void
+  exportAnki: () => void
 }
 
 function choiceRow<V extends string>(
@@ -419,6 +420,7 @@ export function drawBank(els: Els, progress: OsmosisProgress, act: PaneActions):
         </Box>
       )}
       <Box flexDirection="row" columnGap={2}>
+        {saved.length > 0 ? <Button key="export" hotkey="e" plain onPress={act.exportAnki}>Export to Anki</Button> : null}
         <Button key="home" hotkey="h" plain onPress={act.home}>Back</Button>
         <Button key="close" hotkey="x" plain role="dismiss" onPress={act.close}>Close</Button>
       </Box>
