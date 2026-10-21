@@ -91,6 +91,7 @@ The same settings also work as typed commands:
 | `/osmosis local-model <name>` | Sets the model name sent to the local server. Ollama and LM Studio need it. |
 | `/osmosis debug on` / `/osmosis debug off` | Writes a short trace (keys and counts, never reply text) to `~/.claude/plugins/data/osmosis/debug.log`, to help find a problem. |
 | `/osmosis bank` | Opens your word bank. Each word has "say" and "unsave" buttons. |
+| `/osmosis export` | Saves your new saved words as an Anki deck in Downloads. `/osmosis export all` saves every saved word. See "Export to Anki". |
 | `/osmosis quiz` | Starts a 5-question quiz from your saved and recent words. Press `1`-`4` to answer. A word you get right 3 times becomes "known". |
 | `/osmosis lang <name>` | Sets the language. Mandarin is the default and the tested language. |
 
@@ -126,6 +127,17 @@ Other servers work too:
 - LM Studio: `/osmosis endpoint http://127.0.0.1:1234/v1`, then `/osmosis local-model <model name>`.
 
 Osmosis asks the server for JSON that matches a schema. If the server refuses the schema, Osmosis asks again without it and checks the reply the same way. If the server does not answer, the reply stays in English and the bar says "local model unreachable". Osmosis never switches to Haiku by itself. The CC-CEDICT check runs on local results too, so it fixes most pinyin and HSK mistakes of a small model.
+
+## Export to Anki
+
+Type `/osmosis export`, or press `e` in the word bank. Osmosis saves your saved Mandarin words as an Anki deck file, for example `~/Downloads/osmosis-2026-10-21.apkg`. Open the file to import it into Anki.
+
+- Each word makes up to three cards. Recognition shows the word, Production shows the meaning, and Listening plays the word. The back has the word, the pinyin in tone colors, the meaning, the example sentence, and the audio.
+- The audio comes from Microsoft's online Edge voice (`zh-CN-XiaoxiaoNeural`), so the words and examples you export are sent to Microsoft. The first export installs `edge-tts` into the plugin's data folder (`~/.claude/plugins/data/osmosis`). If the voice is not available, for example offline, the deck is still saved; the cards then use Anki's own voice, and there is no Listening card.
+- The cards go in an "Osmosis" deck, with the tag `osmosis`.
+- An export holds only the words you saved since the last export. `/osmosis export all` exports every saved word again. A word you import twice updates its card; it does not make a copy.
+- The file holds only the card text. No settings or other data go in it.
+- It needs Anki 25.x on the same computer. Osmosis builds the deck with the Python that comes with Anki, in a temporary folder. It never opens your own Anki collection, so Anki can stay open.
 
 ## Credits
 

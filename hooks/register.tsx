@@ -40,6 +40,9 @@ import {
   chunkBlock,
   mergeChunks,
   MAX_SWAPS,
+  ankiNotes,
+  exportWords,
+  ttsClips,
 } from './core'
 import type { CardPlace, HistoryRow, OnScreenRows, Segment } from './core'
 import { revertCopy } from './copyback'
@@ -233,10 +236,15 @@ function note(line: string) {
   isTraceDirty = true
 }
 
+async function dataDir($: $T): Promise<string> {
+  const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? '.'
+  const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${home}/.claude`
+  return `${config}/plugins/data/osmosis`
+}
+
 async function traceFile($: $T): Promise<string> {
   if (tracePath) return tracePath
-  const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${(await $.env.get('HOME')) ?? '.'}/.claude`
-  tracePath = `${config}/plugins/data/osmosis/debug.log`
+  tracePath = `${await dataDir($)}/debug.log`
   return tracePath
 }
 
@@ -741,6 +749,77 @@ async function startQuiz($: $T) {
   await update($, viewAtom, () => 'quiz' as const)
 }
 
+function withExample(w: OsmosisWord): OsmosisWord {
+  const ex = w.exampleTarget ? undefined : exCache.get(exampleId(w))
+  return ex ? { ...w, exampleTarget: ex.target, exampleRomanization: ex.romanization, exampleEn: ex.en } : w
+}
+
+// Anki's own Python ships the anki library; these are its standard install paths.
+async function ankiPython($: $T): Promise<string | null> {
+  const home = await $.env.get('HOME')
+  const local = await $.env.get('LOCALAPPDATA')
+  const paths = [
+    home && `${home}/Library/Application Support/AnkiProgramFiles/.venv/bin/python`,
+    home && `${home}/.local/share/AnkiProgramFiles/.venv/bin/python`,
+    local && `${local}\\AnkiProgramFiles\\.venv\\Scripts\\python.exe`,
+  ]
+  for (const path of paths) if (path && (await $.fs.exists(path))) return path
+  return null
+}
+
+async function exportPath($: $T, today: string): Promise<string> {
+  const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? '.'
+  const dir = (await $.fs.exists(`${home}/Downloads`)) ? `${home}/Downloads` : home
+  for (let n = 1; ; n++) {
+    const path = `${dir}/osmosis-${today}${n > 1 ? `-${n}` : ''}.apkg`
+    if (!(await $.fs.exists(path))) return path
+  }
+}
+
+// Pinned: the first export installs this into every user's data folder.
+const EDGE_TTS = 'edge-tts==7.3.1'
+
+const lastLine = (text: string) => text.trim().split('\n').pop()?.slice(0, 120) || 'unknown error'
+
+// edge-tts lives in a venv of its own in the plugin's data folder, made once from
+// Anki's Python, so Anki's own install is never changed.
+async function makeAudio($: $T, anki: string, words: readonly OsmosisWord[], media: string): Promise<string> {
+  const venv = `${await dataDir($)}/tts`
+  const python = anki.endsWith('.exe') ? `${venv}\\Scripts\\python.exe` : `${venv}/bin/python`
+  let note = ''
+  if (!(await $.fs.exists(`${venv}/ready`))) {
+    for (const argv of [[anki, '-m', 'venv', venv], [python, '-m', 'pip', 'install', '-q', '--disable-pip-version-check', EDGE_TTS]]) {
+      const r = await $.process.run(argv, { timeoutMs: 300_000 })
+      if (r.exitCode !== 0) throw new Error(`edge-tts install failed: ${lastLine(r.stderr)}`)
+    }
+    await $.fs.write(`${venv}/ready`, '')
+    note = ` First export: installed edge-tts in ${venv}.`
+  }
+  const clips = ttsClips(words)
+  const timeoutMs = 60_000 + clips.length * 5_000
+  const r = await $.process.run([python, `${$.plugin.root}/scripts/tts.py`, media], { stdin: JSON.stringify(clips), timeoutMs })
+  const made = r.exitCode === 0 ? Number(lastLine(r.stdout)) : 0
+  if (!made) throw new Error(lastLine(r.stderr))
+  return made < clips.length ? ` Audio for ${made} of ${clips.length} clips: ${lastLine(r.stderr)}.${note}` : note
+}
+
+async function exportAnki($: $T, isAll: boolean): Promise<string> {
+  const words = exportWords(await read($, progressAtom), isAll).map(withExample)
+  if (words.length === 0) return 'Osmosis export: no new saved Mandarin words. /osmosis export all exports every saved word.'
+  const python = await ankiPython($)
+  if (!python) return 'Osmosis export: Anki not found. Install Anki 25.x from apps.ankiweb.net.'
+  const today = dayOf(await $.clock.now())
+  const out = await exportPath($, today)
+  const media = `${await dataDir($)}/audio`
+  const audio = await makeAudio($, python, words, media).catch((err: Error) => ` (no audio: ${err.message}; /osmosis export all adds it later)`)
+  const script = `${$.plugin.root}/scripts/export-apkg.py`
+  const r = await $.process.run([python, script, out, media], { stdin: JSON.stringify(ankiNotes(words)), timeoutMs: 60_000 })
+  if (r.exitCode !== 0) return `Osmosis export failed: ${lastLine(r.stderr)}`
+  await changeProgress($, p => ({ ...p, exported: { ...p.exported, ...Object.fromEntries(words.map(w => [w.target, today])) } }))
+  const saved = `Osmosis export: ${words.length} word${words.length === 1 ? '' : 's'} saved to ${out}`
+  return audio.startsWith(' (') ? `${saved}${audio}. Open it to import into Anki.` : `${saved}. Open it to import into Anki.${audio}`
+}
+
 function flip<T>(m: Record<string, T>, k: string, v: T | undefined): Record<string, T> {
   const { [k]: had, ...rest } = m
   return had !== undefined || v === undefined ? rest : { ...m, [k]: v }
@@ -785,6 +864,7 @@ function actions($: $T, key: string | null, words: readonly OsmosisWord[], examp
     setSettings: patch => void changeSettings($, patch),
     openView: view => void (view === 'quiz' ? startQuiz($) : update($, viewAtom, () => 'bank' as const)),
     toggleHelp: row => void update($, helpAtom, open => (open === row ? null : row)),
+    exportAnki: () => void exportAnki($, false).then(text => $.ui.toast(text)),
   }
 }
 
@@ -851,7 +931,7 @@ export const register: Register = on => {
       await $.command.register({
         name: 'osmosis',
         description: 'Osmosis Chinese practice: open the word pane, or change settings',
-        argumentHint: '[help|on|off|level|density|show|coverage|card|band|status|copy|cap|model|endpoint|bank|quiz|lang]',
+        argumentHint: '[help|on|off|level|density|show|coverage|card|band|status|copy|cap|model|endpoint|bank|quiz|export|lang]',
         immediate: true,
       })
     } catch {
@@ -1031,6 +1111,7 @@ export const register: Register = on => {
         const n = Object.keys((await read($, progressAtom)).saved).length
         return { text: `Osmosis word bank: ${n} saved.` }
       }
+      if (v === 'export') return { text: await exportAnki($, arg === 'all') }
       if (v === 'quiz') {
         await startQuiz($)
         await openPane($)

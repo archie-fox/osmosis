@@ -55,14 +55,15 @@ const DICT: Record<string, string> = {
 const EXAMPLE_REPLY = JSON.stringify({ example_target: '电脑坏了。', example_romanization: 'Diànnǎo huài le.', example_en: 'The computer broke.' })
 
 type FetchAnswer = { status: number; text: string } | 'throw'
-type WorldOptions = { history?: string[]; fetch?: (url: string, body: string) => FetchAnswer }
+type RunAnswer = { exitCode?: number; stdout?: string; stderr?: string }
+type WorldOptions = { history?: string[]; fetch?: (url: string, body: string) => FetchAnswer; run?: (argv: readonly string[]) => RunAnswer | undefined }
 
 type Reply = string | null | ((prompt: string) => string | null | Promise<string | null>)
 
 function world(on: On, reply: Reply, store: Record<string, unknown> = {}, opts: WorldOptions = {}) {
   const clock = mock.clock(on, { now: 1_760_000_000_000 })
   mock.store(on, store)
-  const calls = { model: 0, example: 0, opened: [] as string[], fetched: [] as { url: string; body: string }[], status: [] as (string | undefined)[] }
+  const calls = { model: 0, example: 0, opened: [] as string[], fetched: [] as { url: string; body: string }[], status: [] as (string | undefined)[], runs: [] as { argv: readonly string[]; stdin: string }[] }
   const history = opts.history ?? [TEXT, LOW_TEXT]
   const clip = { value: '', writes: [] as string[], reads: 0 }
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -83,6 +84,11 @@ function world(on: On, reply: Reply, store: Record<string, unknown> = {}, opts: 
       clip.writes.push(String(e.init?.stdin ?? ''))
       clip.value = String(e.init?.stdin ?? '')
       return out('')
+    }
+    const answer = opts.run?.(e.argv)
+    if (answer) {
+      calls.runs.push({ argv: e.argv, stdin: String(e.init?.stdin ?? '') })
+      return { value: { exitCode: answer.exitCode ?? 0, stdout: answer.stdout ?? '', stderr: answer.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     return out('Tingting            zh_CN    # 你好\n')
   })
@@ -723,4 +729,79 @@ test('words show as each chunk lands, and a failed chunk leaves only its part in
   const late = await paneText(msg)
   expect(late).toContain('The 表格 needs')
   expect(late).toContain('The window needs')
+})
+
+const ANKI_PY = '/home/someone/Library/Application Support/AnkiProgramFiles/.venv/bin/python'
+const DATA = '/home/someone/.claude/plugins/data/osmosis'
+const exportRun = (tts: RunAnswer) => (argv: readonly string[]): RunAnswer | undefined => {
+  const script = String(argv[1])
+  if (argv[1] === '-m') return {}
+  if (script.endsWith('tts.py')) return tts
+  if (script.endsWith('export-apkg.py')) return { stdout: '{"notes": 1, "audio": 1}' }
+  return undefined
+}
+
+function exportWorld(on: On, run: (argv: readonly string[]) => RunAnswer | undefined, exported: Record<string, string>) {
+  mock.env(on, { HOME: '/home/someone' })
+  const written: string[] = []
+  on('fs.exists', ($, e) => ({ value: e.path === ANKI_PY || e.path === '/home/someone/Downloads' || written.includes(e.path) }))
+  on('fs.write', ($, e) => {
+    written.push(e.path)
+    return { value: undefined }
+  })
+  const saved = { 窗口: savedWord('窗口', 'window'), 表格: savedWord('表格', 'table') }
+  return world(on, REPLY, { progress: { seen: {}, known: {}, saved, mastery: {}, today: { date: '', count: 0 }, exported } }, { run })
+}
+
+const runOsmosis = ($: Engine, args: string) => $.command.run({ command: 'osmosis', args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } })
+
+test('/osmosis export voices new saved words in its own venv, builds the deck, then marks them exported', async ($, on) => {
+  const { calls } = exportWorld(on, exportRun({ stdout: '1' }), { 窗口: '2026-01-01' })
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  const r = await runOsmosis($, 'export')
+  expect(r.text).toMatch(/^Osmosis export: 1 word saved to \/home\/someone\/Downloads\/osmosis-\d{4}-\d{2}-\d{2}\.apkg\. Open it to import into Anki\. First export: installed edge-tts in /)
+  expect(calls.runs.map(x => x.argv.slice(0, 3))).toEqual([
+    [ANKI_PY, '-m', 'venv'],
+    [`${DATA}/tts/bin/python`, '-m', 'pip'],
+    [`${DATA}/tts/bin/python`, expect.stringMatching(/scripts\/tts\.py$/), `${DATA}/audio`],
+    [ANKI_PY, expect.stringMatching(/scripts\/export-apkg\.py$/), expect.stringMatching(/\.apkg$/)],
+  ])
+  const name = expect.stringMatching(/^osmosis-[0-9a-f]{16}\.mp3$/)
+  expect(JSON.parse(calls.runs[2]!.stdin)).toEqual([{ text: '表格', name }])
+  expect(calls.runs[3]!.argv[3]).toBe(`${DATA}/audio`)
+  expect(JSON.parse(calls.runs[3]!.stdin)).toEqual([{ hanzi: '表格', pinyin: '', meaning: 'table', example: '', exampleEn: '', audio: name, exampleAudio: '' }])
+  expect((await runOsmosis($, 'export')).text).toContain('no new saved Mandarin words')
+  const all = await runOsmosis($, 'export all')
+  expect(all.text).toContain('2 words saved')
+  expect(all.text).not.toContain('installed edge-tts')
+  expect(calls.runs.filter(x => x.argv[1] === '-m')).toHaveLength(2)
+})
+
+test('/osmosis export still saves the deck when the voice fails, and says why', async ($, on) => {
+  const { calls } = exportWorld(on, exportRun({ exitCode: 1, stderr: 'Traceback\nClientConnectorError: offline' }), {})
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  const r = await runOsmosis($, 'export')
+  expect(r.text).toMatch(/^Osmosis export: 2 words saved to .*\.apkg \(no audio: ClientConnectorError: offline; \/osmosis export all adds it later\)\. Open it to import into Anki\.$/)
+  expect(calls.runs.at(-1)?.argv[1]).toMatch(/export-apkg\.py$/)
+  expect(calls.runs.find(x => x.argv.includes('install'))?.argv.at(-1)).toBe('edge-tts==7.3.1')
+})
+
+test('/osmosis export without Anki says so and writes nothing', async ($, on) => {
+  mock.env(on, { HOME: '/home/someone' })
+  on('fs.exists', () => ({ value: false }))
+  const toasts: string[] = []
+  on('ui.toast', ($, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  const { calls, clock } = world(on, REPLY, { progress: { seen: {}, known: {}, saved: { 表格: savedWord('表格', 'table') }, mastery: {}, today: { date: '', count: 0 } } }, { run: exportRun({}) })
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  const r = await $.command.run({ command: 'osmosis', args: 'export', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } })
+  expect(r.text).toBe('Osmosis export: Anki not found. Install Anki 25.x from apps.ankiweb.net.')
+  await $.command.run({ command: 'osmosis', args: 'bank', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } })
+  const pane = await $.ui.mount(PANE_PROPS)
+  await pane.press({ key: 'export' })
+  await settleAll(clock)
+  expect(toasts).toEqual([r.text])
+  expect(calls.runs).toEqual([])
 })
