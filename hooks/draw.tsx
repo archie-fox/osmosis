@@ -32,6 +32,7 @@ export type Els = {
 }
 
 export const LEARN_COLOR = 'suggestion'
+const CARD_BACKGROUND = 'inverseText'
 const BULLET = '⏺'
 
 function drawPart({ Text, Link }: Els, p: Part) {
@@ -94,6 +95,37 @@ function drawCard({ Box, Text, Button }: Els, w: OsmosisWord, scope: string, p: 
   )
 }
 
+// A graphical surface lays text out in its own font, so cell offsets from the message
+// top miss the word: pin the card to the word and give it a solid background.
+function drawPinnedCard({ Box, Text, Button }: Els, w: OsmosisWord, scope: string, p: Extract<CardPlace, { kind: 'above' | 'below' }>, say: () => void) {
+  const lines = cardLines(w)
+  return (
+    <Box
+      position="absolute"
+      bottom={1}
+      {...(p.edge === 'right' ? { right: 0 } : { left: 0 })}
+      display="none"
+      hover={{ scope, display: 'flex' }}
+      borderStyle="round"
+      borderDimColor
+      backgroundColor={CARD_BACKGROUND}
+      flexDirection="column"
+      paddingX={1}
+      width={p.inner + 4}
+      flexShrink={0}
+    >
+      <Box flexDirection="row" gap={1}>
+        <Text bold color={LEARN_COLOR}>{w.target}</Text>
+        <Text>{w.romanization}</Text>
+        <Button key={`say-${scope}`} label={SPEAKER} plain onPress={say}>{SPEAKER}</Button>
+      </Box>
+      {lines.slice(1).map((line, i) => (
+        <Text dimColor={i === lines.length - 2} wrap="truncate-end">{line}</Text>
+      ))}
+    </Box>
+  )
+}
+
 function drawToken(
   els: Els,
   t: Token,
@@ -101,14 +133,18 @@ function drawToken(
   msgKey: string,
   s: OsmosisSettings,
   pick: (i: number) => void,
+  pinned: Map<number, CardPlace> | null,
+  say: (i: number) => void,
 ) {
   const { Box, Text } = els
   if (t.kind === 'swap') {
     const w = words[t.index]!
+    const plan = pinned?.get(t.index)
     return (
       <Box key={`k-${t.index}`} flexDirection="row" flexShrink={0}>
         {drawWord(els, w, scopeFor(msgKey, t.index), s, `w-${t.index}`, () => pick(t.index))}
         {t.trailing ? <Text>{t.trailing}</Text> : null}
+        {plan?.kind === 'above' ? drawPinnedCard(els, w, scopeFor(msgKey, t.index), plan, () => say(t.index)) : null}
       </Box>
     )
   }
@@ -126,10 +162,12 @@ export function drawMessage(
   pick: (i: number) => void,
   cards: Map<number, CardPlace> | null,
   say: (i: number) => void = () => {},
+  isPinned = false,
 ): RenderElement {
   const { Box, Text, Markdown } = els
+  const pinned = isPinned ? cards : null
   return (
-    <Box flexDirection="row" marginTop={1}>
+    <Box flexDirection="row" alignItems="flex-start" marginTop={1}>
       <Box minWidth={2} flexShrink={0}>
         <Text color="text">{isFirst ? BULLET : ' '}</Text>
       </Box>
@@ -140,14 +178,14 @@ export function drawMessage(
           ) : (
             <Box flexDirection="column">
               {seg.lines.map(line => (
-                <Box flexDirection="row" paddingLeft={line.indent}>
+                <Box flexDirection="row" alignItems="flex-start" paddingLeft={line.indent}>
                   {line.marker !== null ? (
                     <Box flexShrink={0}>
                       <Text>{`${line.marker} `}</Text>
                     </Box>
                   ) : null}
                   <Box flexDirection="row" flexWrap="wrap" flexGrow={1} flexShrink={1}>
-                    {line.tokens.map(t => drawToken(els, t, words, msgKey, s, pick))}
+                    {line.tokens.map(t => drawToken(els, t, words, msgKey, s, pick, pinned, say))}
                   </Box>
                 </Box>
               ))}
@@ -155,7 +193,7 @@ export function drawMessage(
           ),
         )}
       </Box>
-      {cards
+      {cards && !isPinned
         ? [...cards.entries()].map(([index, plan]) =>
             plan.kind === 'bar' ? null : drawCard(els, words[index]!, scopeFor(msgKey, index), plan, () => say(index)),
           )

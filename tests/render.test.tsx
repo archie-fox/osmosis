@@ -541,6 +541,31 @@ test('a card goes below a first-row word, above a lower word, and to the bar at 
   expect(floating(await short.drawn())).toHaveLength(0)
 })
 
+const mountDesk = ($: Engine, text: string) =>
+  $.ui.mount({ plugin: 'osmosis', surface: 'desktop', viewport: { columns: 100, rows: 40 }, component: 'AssistantMessage', props: { text, isFirstOfReply: true } })
+
+test('on desktop, a card is pinned above its word with a solid background; a first-row word gets a bar card', async ($, on) => {
+  const { clock } = world(on, REPLY, {}, { history: [FIRST_TEXT, LOW_TEXT] })
+  await $.session.start({ cwd: '/tmp', surface: 'desktop', isInteractive: true })
+  const first = await mountDesk($, FIRST_TEXT)
+  const low = await mountDesk($, LOW_TEXT)
+  await settleAll(clock)
+  const tree = (await low.drawn()) as Node
+  expect(floating(tree)).toHaveLength(0)
+  const token = walk(tree, n => n.props?.key === 'k-0')[0]
+  const card = walk(token, n => n.props?.position === 'absolute')[0]
+  expect(card?.props?.bottom).toBe(1)
+  expect(card?.props?.left).toBe(0)
+  expect(card?.props?.backgroundColor).toBeDefined()
+  expect(card?.hover?.scope).toBe(hoverOf(tree, 'w-0')?.scope)
+  expect(JSON.stringify(card)).toContain('click for more')
+  const firstTree = await first.drawn()
+  expect(walk(firstTree, n => n.props?.position === 'absolute')).toHaveLength(0)
+  const band = await $.ui.mount({ ...BAND_PROPS, surface: 'desktop' })
+  const scopes = walk(await band.drawn(), n => n.hover?.display === 'flex').map(n => n.hover?.scope)
+  expect(scopes).toContain(hoverOf(firstTree, 'w-0')?.scope)
+})
+
 test('in word mode, a word with no room for a floating card gets a bar card; others do not', async ($, on) => {
   const { clock } = world(on, REPLY, {}, { history: [LOW_TEXT, SHORT_TEXT] })
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })

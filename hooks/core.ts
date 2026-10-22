@@ -731,7 +731,7 @@ export function cardRows(lines: readonly string[], inner: number): CardRow[] {
 }
 
 export type CardPlace =
-  | { kind: 'above' | 'below'; top: number; left: number; inner: number; height: number }
+  | { kind: 'above' | 'below'; top: number; left: number; inner: number; height: number; edge: 'left' | 'right' }
   | { kind: 'bar' }
 
 export type OnScreenRows = { first: number; last: number } | null | undefined
@@ -745,20 +745,26 @@ export function placeCard(
   totalRows: number,
   onScreen: OnScreenRows,
   columns: number,
+  isPinned = false,
 ): CardPlace {
   const widest = Math.max(...lines.map((l, i) => cellWidth(l) + (i === 0 ? SPEAKER_CELLS : 0)))
   const inner = Math.max(4, Math.min(widest, CARD_MAX - 4, columns - GUTTER - 4))
   const width = inner + 4
   const height = cardRows(lines, inner).length + 2
   const left = Math.max(0, Math.min(GUTTER + spot.lineLeft + spot.x, columns - width))
+  // A graphical surface pins the card to the word, so it only needs the side with room.
+  const edge = GUTTER + spot.lineLeft + spot.x + width > columns ? 'right' : 'left'
   const site = (row: number) => row + 1
   const aboveTop = spot.row - height
-  if (aboveTop >= 0 && (!onScreen || site(aboveTop) >= onScreen.first)) return { kind: 'above', top: aboveTop, left, inner, height }
+  // A graphical surface paints later words over the card and clips it to the message,
+  // so the card goes above a word with room for it, else to the bar.
+  if (isPinned) return aboveTop >= 0 ? { kind: 'above', top: aboveTop, left, inner, height, edge } : { kind: 'bar' }
+  if (aboveTop >= 0 && (!onScreen || site(aboveTop) >= onScreen.first)) return { kind: 'above', top: aboveTop, left, inner, height, edge }
   const belowTop = spot.row + 1
   const belowEnd = belowTop + height - 1
-  if (belowEnd < totalRows && (!onScreen || site(belowEnd) <= onScreen.last)) return { kind: 'below', top: belowTop, left, inner, height }
+  if (belowEnd < totalRows && (!onScreen || site(belowEnd) <= onScreen.last)) return { kind: 'below', top: belowTop, left, inner, height, edge }
   // Fullscreen clips to the viewport, so a short message's card may cover the reply above.
-  if (onScreen && onScreen.first === 0) return { kind: 'above', top: aboveTop, left, inner, height }
+  if (onScreen && onScreen.first === 0) return { kind: 'above', top: aboveTop, left, inner, height, edge }
   return { kind: 'bar' }
 }
 
@@ -768,10 +774,11 @@ export function planCards(
   show: OsmosisSettings['show'],
   columns: number,
   onScreen: OnScreenRows,
+  isPinned = false,
 ): Map<number, CardPlace> {
   const layout = placeSwaps(segs, words, show, columns)
   const plans = new Map<number, CardPlace>()
-  for (const [index, spot] of layout.spots) plans.set(index, placeCard(spot, cardLines(words[index]!), layout.rows, onScreen, columns))
+  for (const [index, spot] of layout.spots) plans.set(index, placeCard(spot, cardLines(words[index]!), layout.rows, onScreen, columns, isPinned))
   return plans
 }
 
